@@ -1,0 +1,11 @@
+Model Information:
+* title:	Neurosama vtuber
+* source:	https://sketchfab.com/3d-models/neurosama-vtuber-b90f8b3548a44191bbfbd8dbb80c3d93
+* author:	Fz3D (https://sketchfab.com/FZ3D)
+
+Model License:
+* license type:	CC-BY-NC-4.0 (http://creativecommons.org/licenses/by-nc/4.0/)
+* requirements:	Author must be credited. No commercial use.
+
+If you use this 3D model in your project be sure to copy paste this credit wherever you share it:
+This work is based on "Neurosama vtuber" (https://sketchfab.com/3d-models/neurosama-vtuber-b90f8b3548a44191bbfbd8dbb80c3d93) by Fz3D (https://sketchfab.com/FZ3D) licensed under CC-BY-NC-4.0 (http://creativecommons.org/licenses/by-nc/4.0/)
