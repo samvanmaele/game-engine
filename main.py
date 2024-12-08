@@ -1,5 +1,5 @@
-import glfw
-import glfw.GLFW as GLFW_CONSTANTS
+import asyncio
+import pygame as pg
 import numpy as np
 from OpenGL.GL import *
 from OpenGL.GL.shaders import compileProgram, compileShader
@@ -14,12 +14,12 @@ np.set_printoptions(threshold=sys.maxsize)
 
 #####################################################################################
 
-input_map = {'right': GLFW_CONSTANTS.GLFW_KEY_D,
-             'left': GLFW_CONSTANTS.GLFW_KEY_A,
-             'forwards': GLFW_CONSTANTS.GLFW_KEY_W,
-             'backwards': GLFW_CONSTANTS.GLFW_KEY_S,
-             'jump': GLFW_CONSTANTS.GLFW_KEY_SPACE,
-             'sprint': GLFW_CONSTANTS.GLFW_KEY_LEFT_SHIFT}
+input_map = {'right': pg.K_d,
+             'left': pg.K_a,
+             'forwards': pg.K_w,
+             'backwards': pg.K_s,
+             'jump': pg.K_SPACE,
+             'sprint': pg.K_LSHIFT}
 
 #####################################################################################
 
@@ -77,20 +77,18 @@ halfHeight, halfWidth = HEIGHT*0.5, WIDTH*0.5
 
 #####################################################################################
 
-def setUpGlfw():
+def setUpPyGame():
     
-    global window
-
-    glfw.init()
-    glfw.window_hint(GLFW_CONSTANTS.GLFW_CONTEXT_VERSION_MAJOR, 4)
-    glfw.window_hint(GLFW_CONSTANTS.GLFW_CONTEXT_VERSION_MINOR, 1)
-    glfw.window_hint(GLFW_CONSTANTS.GLFW_OPENGL_PROFILE, GLFW_CONSTANTS.GLFW_OPENGL_CORE_PROFILE)
-    glfw.window_hint(GLFW_CONSTANTS.GLFW_OPENGL_FORWARD_COMPAT, GLFW_CONSTANTS.GLFW_TRUE)
-    glfw.window_hint(GLFW_CONSTANTS.GLFW_SAMPLES, 4)
-    glfw.window_hint(GLFW_CONSTANTS.GLFW_DOUBLEBUFFER, GL_TRUE)
-    window = glfw.create_window(WIDTH, HEIGHT, "Title", None, None)
-    glfw.make_context_current(window)
-    glfw.swap_interval(0)
+    global window, clock
+    pg.init()
+    
+    pg.display.gl_set_attribute(pg.GL_CONTEXT_MAJOR_VERSION, 4)
+    pg.display.gl_set_attribute(pg.GL_CONTEXT_MINOR_VERSION, 3)
+    pg.display.gl_set_attribute(pg.GL_CONTEXT_PROFILE_MASK, pg.GL_CONTEXT_PROFILE_CORE)
+    pg.display.gl_set_attribute(pg.GL_MULTISAMPLESAMPLES, 4)
+    window = pg.display.set_mode((WIDTH, HEIGHT), pg.OPENGL|pg.DOUBLEBUF)
+    
+    clock = pg.time.Clock()
 
 def createShader(filepaths):
 
@@ -519,8 +517,8 @@ class scene:
         ]
 
     def render(self, entities, lights, times):
-
-        glfw.swap_buffers(window)
+        
+        pg.display.flip()
         glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT)
         glEnable(GL_CULL_FACE)
         
@@ -631,11 +629,15 @@ class scene:
 
 class game:
     
-    __slots__ = ("window", "renderer", "scene", "sceneNr", "last_time", "window_update", "frametime", "keys", "scroll", "jump")
+    __slots__ = ("window", "renderer", "scene", "sceneNr", "last_time", "frametime", "keys", "scroll", "jump")
 
     def __init__(self):
         
+        pg.mouse.set_visible(False)
+        pg.event.set_grab(True)
+        
         self.jump = 0
+        self.scroll = 0
         saveName = "savefile.txt"
         
         try:
@@ -656,67 +658,44 @@ class game:
             camZoom = 3
         
         self.scene = scene(self.sceneNr, playerPos, playerEul, camEul, camZoom)
-        self.set_up_input_systems()
         self.set_up_timer()
         self.gameLoop()
-
-    def set_up_input_systems(self):
-
-        glfw.set_input_mode(window, GLFW_CONSTANTS.GLFW_CURSOR, GLFW_CONSTANTS.GLFW_CURSOR_HIDDEN)
-
-        self.keys = {}
-        self.scroll = 0
-        glfw.set_key_callback(window, self.key_callback)
-        glfw.set_scroll_callback(window, self.scroll_callback)
-
-    def key_callback(self, window, key, scancode, action, mods):
-
-        state = False
-        match action:
-            case GLFW_CONSTANTS.GLFW_PRESS:
-                state = True
-            case GLFW_CONSTANTS.GLFW_RELEASE:
-                state = False
-            case _:
-                return
-
-        self.keys[key] = state
-
-    def scroll_callback(self, window, x_offset, y_offset):
-        
-        self.scroll = -y_offset
 
     def gameLoop(self):
         
         result = CONTINUE
         
+        for event in pg.event.get():
+            if event.type == pg.QUIT:
+                result = EXIT
+            elif event.type == pg.KEYDOWN:
+                if event.key == pg.K_ESCAPE:
+                    result = OPEN_MENU
+            elif event.type == pg.MOUSEWHEEL:
+                self.scroll = event.y
+        
         self.calculate_framerate()
-        glfw.poll_events()
         self.handle_keys()
         self.handle_mouse()
         
         self.scene.update(self.frametime, self.last_time)
-        
-        if glfw.window_should_close(window):
-            result = EXIT
-        elif self.keys.get(GLFW_CONSTANTS.GLFW_KEY_ESCAPE, False):
-            result = OPEN_MENU
         
         return result
 
     def handle_keys(self):
 
         dPos = 0
+        keys = pg.key.get_pressed()
 
-        if self.keys.get(input_map["forwards"], False):
+        if keys[input_map["forwards"]]:
             dPos += np.array([0,1])
-        if self.keys.get(input_map["left"], False):
+        if keys[input_map["left"]]:
             dPos += np.array([1,0])
-        if self.keys.get(input_map["backwards"], False):
+        if keys[input_map["backwards"]]:
             dPos -= np.array([0,1])
-        if self.keys.get(input_map["right"], False):
+        if keys[input_map["right"]]:
             dPos -= np.array([1,0])
-        if self.keys.get(input_map["jump"], False):
+        if keys[input_map["jump"]]:
             self.jump = True
         
         if self.jump:
@@ -727,31 +706,30 @@ class game:
 
     def handle_mouse(self):
 
-        (x,y) = glfw.get_cursor_pos(window)
-        dEulers = 0.001 * (halfWidth - x) * np.array([1,0,0])
-        dEulers += 0.001 * (halfHeight - y) * np.array([0,1,0])
+        (x,y) = pg.mouse.get_rel()
+        dEulers = 0.001 * -x * np.array([1,0,0])
+        dEulers += 0.001 * -y * np.array([0,1,0])
         self.scene.player.camera.spin(dEulers)
-        glfw.set_cursor_pos(window, halfWidth, halfHeight)
         
         self.scene.player.camera.zoom += self.scroll/5
         self.scroll = 0
     
     def set_up_timer(self):
 
-        self.last_time = glfw.get_time()
+        self.last_time = pg.time.get_ticks()/1000
         self.frametime = 0
-        self.window_update = 0
     
     def calculate_framerate(self):
 
-        current_time = glfw.get_time()
-        delta = current_time - self.last_time
-        framerate = int(1/delta)
-        self.frametime = 1000 * delta
-        self.last_time = current_time
-        if (current_time - self.window_update) >= 1:
-            glfw.set_window_title(window, f"Running at {framerate} fps.")
-            self.window_update = current_time
+        clock.tick()
+        framerate = clock.get_fps()
+        if framerate != 0:
+            self.frametime = 1000/framerate
+        
+        time = pg.time.get_ticks()/1000
+        if time - self.last_time > 1:
+            pg.display.set_caption(f"Running at {int(framerate)} fps.")
+            self.last_time = time
     
     def quit(self):
         
@@ -770,39 +748,19 @@ class menu:
     
     def __init__(self):
         
+        pg.mouse.set_visible(True)
+        pg.event.set_grab(False)
+        
         glClearColor(0.0, 0.0, 0.0, 1)
         glDisable(GL_DEPTH_TEST)
-        self.set_up_input_systems()
         self.set_up_timer()
         self.createObjects()
         self.gameLoop()
-        
-    def set_up_input_systems(self):
-
-        glfw.set_input_mode(window, GLFW_CONSTANTS.GLFW_CURSOR, GLFW_CONSTANTS.GLFW_CURSOR_NORMAL)
-        
-        self.keys = {}
-        glfw.set_key_callback(window, self.key_callback)
     
     def set_up_timer(self):
 
-        self.last_time = glfw.get_time()
-        self.current_time = 0
-        self.frames_rendered = 0
-        self.frametime = 0.0
-    
-    def key_callback(self, window, key, scancode, action, mods):
-
-        state = False
-        match action:
-            case GLFW_CONSTANTS.GLFW_PRESS:
-                state = True
-            case GLFW_CONSTANTS.GLFW_RELEASE:
-                state = False
-            case _:
-                return
-
-        self.keys[key] = state
+        self.last_time = pg.time.get_ticks()/1000
+        self.frametime = 0
     
     def createObjects(self):
         
@@ -823,49 +781,53 @@ class menu:
     def gameLoop(self):
         
         result = CONTINUE
+        click = False
         
-        result = self.handleMouse()
-        glfw.poll_events()
+        for event in pg.event.get():
+            if event.type == pg.QUIT:
+                result = EXIT
+            if event.type == pg.MOUSEBUTTONDOWN:
+                click = True
         
-        glfw.swap_buffers(window)
+        result = self.handleMouse(click)
+        
+        pg.display.flip()
         glBindFramebuffer(GL_FRAMEBUFFER, 0)
         glClear(GL_COLOR_BUFFER_BIT)
         glDisable(GL_DEPTH_TEST)
         
         for button in self.buttons:
             button.draw()
+        
         glFlush()
         self.calculate_framerate()
         
-        if glfw.window_should_close(window):
-            result = EXIT
-        
         return result
     
-    def handleMouse(self):
-        (x,y) = glfw.get_cursor_pos(window)
+    def handleMouse(self, click):
+        (x,y) = pg.mouse.get_pos()
         x -= halfWidth
         x /= halfWidth
         y -= halfHeight
         y /= -halfHeight
         
         for button in self.buttons:
-            result = button.handleMouse((x,y))
+            result = button.handleMouse((x,y), click)
             if result != CONTINUE:
                 return result
         return CONTINUE
     
     def calculate_framerate(self):
 
-        self.current_time = glfw.get_time()
-        delta = self.current_time - self.last_time
-        if (delta >= 1):
-            framerate = max(1,int(self.frames_rendered/delta))
-            glfw.set_window_title(window, f"Running at {framerate} fps.")
-            self.last_time = self.current_time
-            self.frames_rendered = -1
-            self.frametime = float(1000.0 / max(1,framerate))
-        self.frames_rendered += 1
+        clock.tick()
+        framerate = clock.get_fps()
+        if framerate != 0:
+            self.frametime = 1000/framerate
+        
+        time = pg.time.get_ticks()/1000
+        if time - self.last_time > 1:
+            pg.display.set_caption(f"Running at {int(framerate)} fps.")
+            self.last_time = time
     
     def quit(self):
         for button in self.buttons:
@@ -920,7 +882,7 @@ class button:
                 return False
         return True
     
-    def handleMouse(self, pos):
+    def handleMouse(self, pos, click):
         
         glBindBuffer(GL_ARRAY_BUFFER, self.vbo)
         memoryHandle = glMapBuffer(GL_ARRAY_BUFFER, GL_WRITE_ONLY)
@@ -929,7 +891,7 @@ class button:
         
         if self.inside(pos):
             self.texture = self.hoverTexture
-            if glfw.get_mouse_button(window, GLFW_CONSTANTS.GLFW_MOUSE_BUTTON_1):
+            if click:
                 return self.click()
         else:
             self.texture = self.baseTexture
@@ -1323,8 +1285,8 @@ class boundingBoxMesh:
 
 #####################################################################################
 
-def startProgram():
-    setUpGlfw()
+async def main():
+    setUpPyGame()
     myApp = game()
     result = CONTINUE
     while result == CONTINUE:
@@ -1337,7 +1299,7 @@ def startProgram():
             myApp.quit()
             myApp = menu()
             result = CONTINUE
+        await asyncio.sleep(0)
     myApp.quit()
 
-#cProfile.run('startProgram()')
-startProgram()
+asyncio.run(main())
