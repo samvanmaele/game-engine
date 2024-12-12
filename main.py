@@ -1,25 +1,43 @@
+
+p# python -m pygbag --PYBUILD 3.12 --ume_block 0 --template noctx.tmpl .
+
+# /// script
+# dependencies = [
+#  "numpy",
+#  "pygame",
+#  "pygltflib",
+#  "struct",
+#  "zengl",
+#  "marshmallow"
+# ]
+# ///
+
 import asyncio
-import pygame as pg
+import pygame as pygame
 import numpy as np
-from OpenGL.GL import *
-from OpenGL.GL.shaders import compileProgram, compileShader
-import ctypes
-import pyrr
-import cv2
 from pygltflib import GLTF2
 import struct
-import cProfile
-import sys
-np.set_printoptions(threshold=sys.maxsize)
+import zengl
+
+HEIGHT, WIDTH = 540, 960
+halfHeight, halfWidth = HEIGHT*0.5, WIDTH*0.5
+
+pygame.init()
+pygame.display.set_mode((WIDTH, HEIGHT), flags=pygame.OPENGL|pygame.DOUBLEBUF)
+
+ctx = zengl.context()
+size = pygame.display.get_window_size()
+image = ctx.image(size, 'rgba8unorm', samples=4)
+depth = ctx.image(size, 'depth24plus', samples=4)
 
 #####################################################################################
 
-input_map = {'right': pg.K_d,
-             'left': pg.K_a,
-             'forwards': pg.K_w,
-             'backwards': pg.K_s,
-             'jump': pg.K_SPACE,
-             'sprint': pg.K_LSHIFT}
+input_map = {'right': pygame.K_d,
+             'left': pygame.K_a,
+             'forwards': pygame.K_w,
+             'backwards': pygame.K_s,
+             'jump': pygame.K_SPACE,
+             'sprint': pygame.K_LSHIFT}
 
 #####################################################################################
 
@@ -38,7 +56,7 @@ ENTITY_TYPE = {"player": 0,
                "item_shop": 7,
                "pool": 8,
                "street": 9,
-               "upgrade_smith": 10,
+               "upygamerade_smith": 10,
                "utilities": 11,
                "vedal's_house": 12,
                "walls": 13,
@@ -58,12 +76,12 @@ ELEMENT_SIZES = {'SCALAR': 1,
                  'MAT3': 9, 
                  'MAT4': 16}
 
-STRUCT_TYPE = {GL_BYTE: 'b',
-               GL_UNSIGNED_BYTE: 'B',
-               GL_SHORT: 'h',
-               GL_UNSIGNED_SHORT:'H',
-               GL_UNSIGNED_INT:'I',
-               GL_FLOAT:'f'}
+STRUCT_TYPE = {5120: 'b',
+               5121: 'B',
+               5122: 'h',
+               5123:'H',
+               5125:'I',
+               5126:'f'}
 
 VALUE_SIZE = {'b': 1,
               'h': 2,
@@ -72,55 +90,207 @@ VALUE_SIZE = {'b': 1,
 
 #####################################################################################
 
-HEIGHT, WIDTH = 720, 1280
-halfHeight, halfWidth = HEIGHT*0.5, WIDTH*0.5
+def create_perspective_projection_from_bounds(left,right,bottom,top,near,far,dtype=None):
+    A = (right + left) / (right - left)
+    B = (top + bottom) / (top - bottom)
+    C = -(far + near) / (far - near)
+    D = -2. * far * near / (far - near)
+    E = 2. * near / (right - left)
+    F = 2. * near / (top - bottom)
 
-#####################################################################################
+    return np.array(((E,  0., 0., 0.),
+                     (0., F,  0., 0.),
+                     (A,  B,  C, -1.),
+                     (0., 0., D,  0.))
+    )
 
-def setUpPyGame():
+def normalize(vec):
     
-    global window, clock
-    pg.init()
-    
-    pg.display.gl_set_attribute(pg.GL_CONTEXT_MAJOR_VERSION, 4)
-    pg.display.gl_set_attribute(pg.GL_CONTEXT_MINOR_VERSION, 3)
-    pg.display.gl_set_attribute(pg.GL_CONTEXT_PROFILE_MASK, pg.GL_CONTEXT_PROFILE_CORE)
-    pg.display.gl_set_attribute(pg.GL_MULTISAMPLESAMPLES, 4)
-    window = pg.display.set_mode((WIDTH, HEIGHT), pg.OPENGL|pg.DOUBLEBUF)
-    
-    clock = pg.time.Clock()
+    return (vec.T  / np.sqrt(np.sum(vec**2,axis=-1))).T
 
-def createShader(filepaths):
+def create_from_eulers(eulers, dtype=None):
+    dtype = dtype or eulers.dtype
 
-    with open(filepaths[0], 'r') as f:
-        vertexSrc = f.readlines()
+    roll, pitch, yaw = eulers
+
+    sP = np.sin(pitch)
+    cP = np.cos(pitch)
+    sR = np.sin(roll)
+    cR = np.cos(roll)
+    sY = np.sin(yaw)
+    cY = np.cos(yaw)
+
+    return np.array(
+        [
+            # m1
+            [
+                cY * cP,
+                -cY * sP * cR + sY * sR,
+                cY * sP * sR + sY * cR,
+            ],
+            # m2
+            [
+                sP,
+                cP * cR,
+                -cP * sR,
+            ],
+            # m3
+            [
+                -sY * cP,
+                sY * sP * cR + cY * sR,
+                -sY * sP * sR + cY * cR,
+            ]
+        ],
+        dtype=dtype
+    )
+
+def create_from_quaternion(quat, dtype=None):
+    dtype = dtype
+
+    qx, qy, qz, qw = quat[0], quat[1], quat[2], quat[3]
+
+    sqw = qw**2
+    sqx = qx**2
+    sqy = qy**2
+    sqz = qz**2
+    qxy = qx * qy
+    qzw = qz * qw
+    qxz = qx * qz
+    qyw = qy * qw
+    qyz = qy * qz
+    qxw = qx * qw
+
+    invs = 1 / (sqx + sqy + sqz + sqw)
+    m00 = ( sqx - sqy - sqz + sqw) * invs
+    m11 = (-sqx + sqy - sqz + sqw) * invs
+    m22 = (-sqx - sqy + sqz + sqw) * invs
+    m10 = 2.0 * (qxy + qzw) * invs
+    m01 = 2.0 * (qxy - qzw) * invs
+    m20 = 2.0 * (qxz - qyw) * invs
+    m02 = 2.0 * (qxz + qyw) * invs
+    m21 = 2.0 * (qyz + qxw) * invs
+    m12 = 2.0 * (qyz - qxw) * invs
+
+    return np.array([
+        [m00, m01, m02, 0],
+        [m10, m11, m12, 0],
+        [m20, m21, m22, 0],
+        [0,   0,   0,   1]
+    ], dtype=dtype)
+
+def create_from_translation(vec, dtype=None):
     
-    with open(filepaths[1], 'r') as f:
-        fragmentSrc = f.readlines()
+    dtype = dtype
+    mat = np.identity(4, dtype=dtype)
+    mat[3, 0:3] = vec[:3]
+    return mat
+
+def create_from_scale(scale, dtype=None):
+    m = np.diagflat([scale[0], scale[1], scale[2], 1.0])
+    if dtype:
+        m = m.astype(dtype)
+    return m
+
+def ray_intersect_aabb(ray, aabb):
     
-    if len(filepaths) == 2:
+    direction = ray[1]
+    dir_fraction = np.empty(3, dtype = ray.dtype)
+    dir_fraction[direction == 0.0] = np.inf
+    dir_fraction[direction != 0.0] = np.divide(1.0, direction[direction != 0.0])
+
+    t1 = (aabb[0,0] - ray[0,0]) * dir_fraction[ 0 ]
+    t2 = (aabb[1,0] - ray[0,0]) * dir_fraction[ 0 ]
+    t3 = (aabb[0,1] - ray[0,1]) * dir_fraction[ 1 ]
+    t4 = (aabb[1,1] - ray[0,1]) * dir_fraction[ 1 ]
+    t5 = (aabb[0,2] - ray[0,2]) * dir_fraction[ 2 ]
+    t6 = (aabb[1,2] - ray[0,2]) * dir_fraction[ 2 ]
+
+
+    tmin = max(min(t1, t2), min(t3, t4), min(t5, t6))
+    tmax = min(max(t1, t2), max(t3, t4), max(t5, t6))
+
+    # if tmax < 0, ray (line) is intersecting AABB
+    # but the whole AABB is behind the ray start
+    if tmax < 0:
+        return None
+
+    # if tmin > tmax, ray doesn't intersect AABB
+    if tmin > tmax:
+        return None
+
+    # t is the distance from the ray point
+    # to intersection
+
+    t = min(x for x in [tmin, tmax] if x >= 0)
+    point = ray[0] + (ray[1] * t)
+    return point
+
+projection = create_perspective_projection_from_bounds(-0.1, 0.1, -0.1*HEIGHT/WIDTH, 0.1*HEIGHT/WIDTH, 0.1, 2000)
+projRow1, projRow2, projRow3, projRow4 = projection
+
+clock = pygame.time.Clock()
+
+def shader3D(vertexBuffer, vertexCount, normBuffer, texBuffer, indexBuffer, texture):
+    
+    indexB = ctx.buffer(indexBuffer.astype(np.int32))
+    
+    return ctx.pipeline(
+        vertex_shader="""
+            #version 330 core
+
+            layout(location = 0) in vec3 vpos;
+            layout(location = 1) in vec2 vtex;
+            
+            uniform mat4 projection;
+            uniform mat4 view;
+            uniform mat4 model;
+
+            out vec2 TexCoords;
+
+            void main()
+            {
+                vec4 position = vec4(vpos, 1.0);
+                TexCoords = vtex;
+
+                gl_Position = projection * view * model * position;
+            }
+        """,
+        fragment_shader="""
+            #version 330 core
+
+            in vec2 TexCoords;
+            uniform sampler2D material;
+
+            layout (location = 0) out vec4 color;
+
+            void main()
+            {
+                color = texture(material, TexCoords);
+                color = pow(color, vec4(0.45));
+            }
+        """,
         
-        shader = compileProgram(compileShader(vertexSrc, GL_VERTEX_SHADER),
-                                compileShader(fragmentSrc, GL_FRAGMENT_SHADER))
-    else:
-        with open(filepaths[2], 'r') as f:
-            tesControlSrc = f.readlines()
+        uniforms={'projection': (*projRow1, *projRow2, *projRow3, *projRow4), 'view': ((1,0,0,0), (0,1,0,0), (0,0,1,0), (0,0,0,1)), 'model': ((1,0,0,0), (0,1,0,0), (0,0,1,0), (0,0,0,1))},
         
-        with open(filepaths[3], 'r') as f:
-            tesEvalSrc = f.readlines()
-    
-        shader = compileProgram(compileShader(vertexSrc, GL_VERTEX_SHADER),
-                                compileShader(fragmentSrc, GL_FRAGMENT_SHADER),
-                                compileShader(tesControlSrc, GL_TESS_CONTROL_SHADER),
-                                compileShader(tesEvalSrc, GL_TESS_EVALUATION_SHADER))
-    
-    return shader
+        blend={'enable': True, 'src_color': 'src_alpha', 'dst_color': 'one_minus_src_alpha'},
+        
+        layout=[{'name': 'material', 'binding': 1}],
+        
+        resources=[{'type': 'sampler', 'binding': 1, 'image': texture, 'wrap_x': 'clamp_to_edge', 'wrap_y': 'clamp_to_edge', 'min_filter': 'nearest', 'mag_filter': 'nearest'}],
+        
+        framebuffer= [image, depth],
+        vertex_buffers= [*zengl.bind(ctx.buffer(vertexBuffer), "3f", 0), *zengl.bind(ctx.buffer(texBuffer), "2f", 1)],
+        index_buffer= indexB,
+        vertex_count= vertexCount,
+        #cull_face= "back",
+        topology= "triangles"
+    )
 
 #####################################################################################
 
 class entity:
 
-    def __init__(self, position, eulers, size):
+    def __init__(self, position, size, eulers= [0,0,0]):
         
         self.position = np.array(position, dtype=np.float32)
         self.eulers = np.array(eulers, dtype=np.float32)
@@ -146,7 +316,7 @@ class player(entity):
     
     def __init__(self, position, eulers, camEulers, camZoom):
         
-        super().__init__(position, eulers, 0)
+        super().__init__(position, 0, eulers)
         self.camera = camera(self.position, camEulers, camZoom)
     
     def update(self, fps):
@@ -176,7 +346,7 @@ class camera(entity):
     
     def __init__(self, position, eulers, camZoom):
         
-        super().__init__(position, eulers, 0)
+        super().__init__(position, 0, eulers)
         self.zoom = camZoom
         self.update(position)
         
@@ -225,39 +395,20 @@ class camera(entity):
 
     def makeFrustum(self):
 
-        self.frustumParts = [pyrr.vector.normalize(self.forwards + self.right), pyrr.vector.normalize(self.forwards - self.right), pyrr.vector.normalize(self.forwards + self.up * 16/9), pyrr.vector.normalize(self.forwards - self.up * 16/9)]
+        self.frustumParts = [normalize(self.forwards + self.right), normalize(self.forwards - self.right), normalize(self.forwards + self.up * 16/9), normalize(self.forwards - self.up * 16/9)]
         self.frustum = [np.append(normal, np.sum(normal * self.position)) for normal in self.frustumParts]
 
 class scene:
     
     def __init__(self, sceneNr, playerPos, playerEul, camEul, camZoom):
         
-        self.set_up_opengl()
-        
-        self.shaders = {
-            "2D" : createShader(("shaders/shader_2D/vertex_2D.glsl", "shaders/shader_2D/fragment_2D.glsl")),
-            "3D" : createShader(("shaders/shader_3D/vertex_3D.glsl","shaders/shader_3D/fragment_3D.glsl")),
-            "3D_animated" : createShader(("shaders/shader_3D_animated/vertex_3D_animated.glsl","shaders/shader_3D_animated/fragment_3D_animated.glsl")),
-            "skybox" : createShader(("shaders/shader_skybox/vertex_skybox.glsl","shaders/shader_skybox/fragment_skybox.glsl")),
-            "terrain" : createShader(("shaders/shader_terrain/vertex_terrain.glsl","shaders/shader_terrain/fragment_terrain.glsl","shaders/shader_terrain/tesControl_terrain.glsl","shaders/shader_terrain/tesEval_terrain.glsl")),
-            "grass" : createShader(("shaders/shader_grass/vertex_grass.glsl","shaders/shader_grass/fragment_grass.glsl")),
-        }
-        
-        glUseProgram(self.shaders["skybox"])
+        """
         self.skybox = (gltfMesh("models/box 3D model/Box.gltf"), [[cubeMap(["gfx/skybox/skybox_right.png","gfx/skybox/skybox_left.png","gfx/skybox/skybox_top.png","gfx/skybox/skybox_bottom.png","gfx/skybox/skybox_front.png","gfx/skybox/skybox_back.png"], 0)]])
         
-        glUseProgram(self.shaders["terrain"])
         self.terrain = (gltfMesh("models/circle2K.gltf"), [[material("gfx/map8.png", 0), material("gfx/sand-v1.png", 1), material("gfx/grass.png", 2)]])
-        for i in range(3):
-            glUniform1i(13+i, i)
         
-        glUseProgram(self.shaders["grass"])
         self.fern = (gltfMesh("models/grass.gltf"), [[material("gfx/map8.png", 0), material("gfx/grass2D.png", 1)]])
-        for i in range(2):
-            glUniform1i(12+i, i)
-        
-        #glUseProgram(self.shaders["2D"])
-        #self.userInterface = (gltfMesh("models/button.gltf"), [[material("gfx/button.png")]])
+        """
         
         self.player = player(playerPos, playerEul, camEul, camZoom)
         self.jumpTime = 0
@@ -268,63 +419,62 @@ class scene:
             self.lights = [pointLight([0, 1000, 0], [0, 0, 0], [255,255,255], 500)]
             
             self.entities = {
-                ENTITY_TYPE["player"]:               [self.player                                       , [gltfMesh("models/vedal987.gltf",                             self.shaders), [[material("models/vedal987.png", 0)]]]],
-                ENTITY_TYPE["Camilla's_tent"]:       [entity([-8,       663.55,  40   ], [0, 0, 0], 20 ), [gltfMesh("models/V-nexus/Camilla's_tent/Camillas_tent.gltf", self.shaders), [[material("models/V-nexus/Camilla's_tent/Camillas_tent.png", 0)],
-                                                                                                                                                                        [material("models/V-nexus/Camilla's_tent/Camillas_tent.png", 0)]]]],
-                ENTITY_TYPE["drone_factory"]:        [entity([43,       660.35,  7.775], [0, 0, 0], 25 ), [gltfMesh("models/V-nexus/drone_factory/drone_factory.gltf",  self.shaders), [[material("models/V-nexus/drone_factory/drone_factory.png", 0)],
-                                                                                                                                                                        [material("models/V-nexus/drone_factory/drone_factory.png", 0)],
-                                                                                                                                                                        [material("models/V-nexus/drone_factory/drone_factory.png", 0)],
-                                                                                                                                                                        [material("models/V-nexus/drone_factory/drone_factory.png", 0)]]]],
-                ENTITY_TYPE["floors"]:               [entity([0,        660.5,   0    ], [0, 0, 0], 60 ), [gltfMesh("models/V-nexus/floors/floors.gltf",                self.shaders), [[material("models/V-nexus/floors/grass_field2.png", 0)],
-                                                                                                                                                                        [material("models/V-nexus/floors/grass_field2.png", 0)],
-                                                                                                                                                                        [material("models/V-nexus/floors/grass_field2.png", 0)],
-                                                                                                                                                                        [material("models/V-nexus/floors/grass_field2.png", 0)],
-                                                                                                                                                                        [material("models/V-nexus/floors/item_factory.png", 0)],
-                                                                                                                                                                        [material("models/V-nexus/floors/upgrade_smith.png", 0)],
-                                                                                                                                                                        [material("models/V-nexus/floors/vedals_house.png", 0)],
-                                                                                                                                                                        [material("models/V-nexus/floors/water_pump.png", 0)],
-                                                                                                                                                                        [material("models/V-nexus/floors/power_generator.png", 0)]]]],
-                ENTITY_TYPE["item_factory"]:         [entity([46,       664.31, -33.75], [0, 0, 0], 20 ), [gltfMesh("models/V-nexus/item_factory/item_factory.gltf",    self.shaders), [[material("models/V-nexus/item_factory/item_factory.png", 0)]]]],
-                ENTITY_TYPE["item_shop"]:            [entity([42,       658.1,   46   ], [0, 0, 0], 10 ), [gltfMesh("models/V-nexus/item_shop/item_shop.gltf",          self.shaders), [[material("models/V-nexus/item_shop/item_shop.png", 0)]]]],
-                ENTITY_TYPE["street"]:               [entity([6,        658,     0    ], [0, 0, 0], 70 ), [gltfMesh("models/V-nexus/street/street.gltf",                self.shaders), [[material("models/V-nexus/street/street.png", 0)]]]],
-                ENTITY_TYPE["upgrade_smith"]:        [entity([41.9,     661.2,  -10.05], [0, 0, 0], 14 ), [gltfMesh("models/V-nexus/upgrade_smith/upgrade_smith.gltf",  self.shaders), [[material("models/V-nexus/upgrade_smith/upgrade_smith.png", 0)],
-                                                                                                                                                                        [material("models/V-nexus/upgrade_smith/piston.png", 0)],
-                                                                                                                                                                        [material("models/V-nexus/upgrade_smith/piston_base.png", 0)],
-                                                                                                                                                                        [material("models/V-nexus/upgrade_smith/gear.png", 0)],
-                                                                                                                                                                        [material("models/V-nexus/upgrade_smith/piston.png", 0)],
-                                                                                                                                                                        [material("models/V-nexus/upgrade_smith/piston_base.png", 0)],
-                                                                                                                                                                        [material("models/V-nexus/upgrade_smith/piston.png", 0)],
-                                                                                                                                                                        [material("models/V-nexus/upgrade_smith/piston_base.png", 0)],
-                                                                                                                                                                        [material("models/V-nexus/upgrade_smith/piston.png", 0)],
-                                                                                                                                                                        [material("models/V-nexus/upgrade_smith/piston_base.png", 0)],
-                                                                                                                                                                        [material("models/V-nexus/upgrade_smith/gear.png", 0)],
-                                                                                                                                                                        [material("models/V-nexus/upgrade_smith/gear.png", 0)]]]],
-                ENTITY_TYPE["utilities"]:            [entity([7.75,     658.6,  -37   ], [0, 0, 0], 20 ), [gltfMesh("models/V-nexus/utilities/utilities.gltf",          self.shaders), [[material("models/V-nexus/utilities/water_pump.png", 0)],
-                                                                                                                                                                        [material("models/V-nexus/utilities/water_pump.png", 0)],
-                                                                                                                                                                        [material("models/V-nexus/utilities/water_pump.png", 0)],
-                                                                                                                                                                        [material("models/V-nexus/utilities/water_pump.png", 0)],
-                                                                                                                                                                        [material("models/V-nexus/utilities/power_generator.png", 0)],
-                                                                                                                                                                        [material("models/V-nexus/utilities/power_generator.png", 0)]]]],
-                ENTITY_TYPE["walls"]:                [entity([0,        660.5,   0    ], [0, 0, 0], 70 ), [gltfMesh("models/V-nexus/walls/walls.gltf",                  self.shaders), [[material("models/V-nexus/walls/walls.png", 0)],
-                                                                                                                                                                        [material("models/V-nexus/walls/walls.png", 0)],
-                                                                                                                                                                        [material("models/V-nexus/walls/walls.png", 0)],
-                                                                                                                                                                        [material("models/V-nexus/walls/walls.png", 0)],
-                                                                                                                                                                        [material("models/V-nexus/walls/walls.png", 0)],
-                                                                                                                                                                        [material("models/V-nexus/walls/walls.png", 0)],
-                                                                                                                                                                        [material("models/V-nexus/walls/walls.png", 0)],
-                                                                                                                                                                        [material("models/V-nexus/walls/walls.png", 0)],]]],
-                ENTITY_TYPE["world_center"]:         [entity([2,        709.1,   4    ], [0, 0, 0], 70 ), [gltfMesh("models/V-nexus/world_center/world_center.gltf",    self.shaders), [[material("models/V-nexus/world_center/world_center_building.png", 0)],
-                                                                                                                                                                        [material("models/V-nexus/world_center/beacon.png", 0)]]]],
-                
-                ENTITY_TYPE["vedal's_house"]:        [entity([-36.15,   663.5,   26   ], [0, 0, 0], 40 ), [gltfMesh("models/V-nexus/vedal's_house/vedals_house.gltf",  self.shaders),  [[material("models/V-nexus/vedal's_house/vedals_house.png", 0)],
-                                                                                                                                                                        [material("models/V-nexus/vedal's_house/vedals_house.png", 0)],
-                                                                                                                                                                        [material("models/V-nexus/vedal's_house/vedals_house.png", 0)],
-                                                                                                                                                                        [material("models/V-nexus/vedal's_house/vedals_house.png", 0)],
-                                                                                                                                                                        [material("models/V-nexus/vedal's_house/vedals_house.png", 0)],
-                                                                                                                                                                        [material("models/V-nexus/vedal's_house/vedals_house.png", 0)],
-                                                                                                                                                                        [material("models/V-nexus/vedal's_house/vedals_house.png", 0)],
-                                                                                                                                                                        [material("models/V-nexus/vedal's_house/vedals_house.png", 0)]]]],
-                ENTITY_TYPE["bounding_box"]:         [entity([0,        0,       0    ], [0, 0, 0], 999), [boundingBoxMesh(),                                                          [[material("gfx/redA.png", 0)]]]]
+                ENTITY_TYPE["player"]:            [self.player,                    gltfMesh("models/vedal987.gltf",                             [material("models/vedal987.png")])],
+                ENTITY_TYPE["Camilla's_tent"]:    [entity([-8,663.55,40],20),      gltfMesh("models/V-nexus/Camilla's_tent/Camillas_tent.gltf", [material("models/V-nexus/Camilla's_tent/Camillas_tent.png"),
+                                                                                                                                                 material("models/V-nexus/Camilla's_tent/Camillas_tent.png")])],
+                ENTITY_TYPE["drone_factory"]:     [entity([43,660.35,7.775],25),   gltfMesh("models/V-nexus/drone_factory/drone_factory.gltf",  [material("models/V-nexus/drone_factory/drone_factory.png"),
+                                                                                                                                                 material("models/V-nexus/drone_factory/drone_factory.png"),
+                                                                                                                                                 material("models/V-nexus/drone_factory/drone_factory.png"),
+                                                                                                                                                 material("models/V-nexus/drone_factory/drone_factory.png")])],
+                ENTITY_TYPE["floors"]:            [entity([0,660.5,0],60),         gltfMesh("models/V-nexus/floors/floors.gltf",                [material("models/V-nexus/floors/grass_field2.png"),
+                                                                                                                                                 material("models/V-nexus/floors/grass_field2.png"),
+                                                                                                                                                 material("models/V-nexus/floors/grass_field2.png"),
+                                                                                                                                                 material("models/V-nexus/floors/grass_field2.png"),
+                                                                                                                                                 material("models/V-nexus/floors/item_factory.png"),
+                                                                                                                                                 material("models/V-nexus/floors/upgrade_smith.png"),
+                                                                                                                                                 material("models/V-nexus/floors/vedals_house.png"),
+                                                                                                                                                 material("models/V-nexus/floors/water_pump.png"),
+                                                                                                                                                 material("models/V-nexus/floors/power_generator.png")])],
+                ENTITY_TYPE["item_factory"]:      [entity([46,664.31,-33.75],20),  gltfMesh("models/V-nexus/item_factory/item_factory.gltf",    [material("models/V-nexus/item_factory/item_factory.png")])],
+                ENTITY_TYPE["item_shop"]:         [entity([42,658.1,46],10),       gltfMesh("models/V-nexus/item_shop/item_shop.gltf",          [material("models/V-nexus/item_shop/item_shop.png")])],
+                ENTITY_TYPE["street"]:            [entity([6,658,0],70),           gltfMesh("models/V-nexus/street/street.gltf",                [material("models/V-nexus/street/street.png")])],
+                ENTITY_TYPE["upygamerade_smith"]: [entity([41.9,661.2,-10.05],14), gltfMesh("models/V-nexus/upgrade_smith/upgrade_smith.gltf",  [material("models/V-nexus/upgrade_smith/upgrade_smith.png"),
+                                                                                                                                                 material("models/V-nexus/upgrade_smith/piston.png"),
+                                                                                                                                                 material("models/V-nexus/upgrade_smith/piston_base.png"),
+                                                                                                                                                 material("models/V-nexus/upgrade_smith/gear.png"),
+                                                                                                                                                 material("models/V-nexus/upgrade_smith/piston.png"),
+                                                                                                                                                 material("models/V-nexus/upgrade_smith/piston_base.png"),
+                                                                                                                                                 material("models/V-nexus/upgrade_smith/piston.png"),
+                                                                                                                                                 material("models/V-nexus/upgrade_smith/piston_base.png"),
+                                                                                                                                                 material("models/V-nexus/upgrade_smith/piston.png"),
+                                                                                                                                                 material("models/V-nexus/upgrade_smith/piston_base.png"),
+                                                                                                                                                 material("models/V-nexus/upgrade_smith/gear.png"),
+                                                                                                                                                 material("models/V-nexus/upgrade_smith/gear.png")])],
+                ENTITY_TYPE["utilities"]:         [entity([7.75,658.6,-37],20),    gltfMesh("models/V-nexus/utilities/utilities.gltf",          [material("models/V-nexus/utilities/water_pump.png"),
+                                                                                                                                                 material("models/V-nexus/utilities/water_pump.png"),
+                                                                                                                                                 material("models/V-nexus/utilities/water_pump.png"),
+                                                                                                                                                 material("models/V-nexus/utilities/water_pump.png"),
+                                                                                                                                                 material("models/V-nexus/utilities/power_generator.png"),
+                                                                                                                                                 material("models/V-nexus/utilities/power_generator.png")])],
+                ENTITY_TYPE["walls"]:             [entity([0,660.5,0],70),         gltfMesh("models/V-nexus/walls/walls.gltf",                  [material("models/V-nexus/walls/walls.png"),
+                                                                                                                                                 material("models/V-nexus/walls/walls.png"),
+                                                                                                                                                 material("models/V-nexus/walls/walls.png"),
+                                                                                                                                                 material("models/V-nexus/walls/walls.png"),
+                                                                                                                                                 material("models/V-nexus/walls/walls.png"),
+                                                                                                                                                 material("models/V-nexus/walls/walls.png"),
+                                                                                                                                                 material("models/V-nexus/walls/walls.png"),
+                                                                                                                                                 material("models/V-nexus/walls/walls.png"),])],
+                ENTITY_TYPE["world_center"]:      [entity([2,709.1,4],70),         gltfMesh("models/V-nexus/world_center/world_center.gltf",    [material("models/V-nexus/world_center/world_center_building.png"),
+                                                                                                                                                 material("models/V-nexus/world_center/beacon.png")])],
+                ENTITY_TYPE["vedal's_house"]:     [entity([-36.15,663.5,26],40),   gltfMesh("models/V-nexus/vedal's_house/vedals_house.gltf",   [material("models/V-nexus/vedal's_house/vedals_house.png"),
+                                                                                                                                                 material("models/V-nexus/vedal's_house/vedals_house.png"),
+                                                                                                                                                 material("models/V-nexus/vedal's_house/vedals_house.png"),
+                                                                                                                                                 material("models/V-nexus/vedal's_house/vedals_house.png"),
+                                                                                                                                                 material("models/V-nexus/vedal's_house/vedals_house.png"),
+                                                                                                                                                 material("models/V-nexus/vedal's_house/vedals_house.png"),
+                                                                                                                                                 material("models/V-nexus/vedal's_house/vedals_house.png"),
+                                                                                                                                                 material("models/V-nexus/vedal's_house/vedals_house.png")])],
+                ENTITY_TYPE["bounding_box"]:      [entity([0,0,0],999),            boundingBoxMesh(                                              material("gfx/redA.png"))]
                 }
         
         self.entityGrid = [[[] for j in range(500)] for i in range(500)]
@@ -333,46 +483,11 @@ class scene:
             #skip non-collision objects
             if entity_type in [ENTITY_TYPE["player"], ENTITY_TYPE["bounding_box"]]: continue
             
-            meshBoundingBoxes = obj[1][0].boundingBox + obj[0].position
+            meshBoundingBoxes = obj[1].boundingBox + obj[0].position
             for meshBoundingBox in meshBoundingBoxes:
                 
                 meshmin, meshmax = [list(map(int, vec3[::2])) for vec3 in meshBoundingBox/4 + 250]
-                [self.entityGrid[x][y].append([entity_type, obj]) for x in range(meshmin[0], meshmax[0]+1) for y in range(meshmin[1], meshmax[1]+1) if [entity_type, obj] not in self.entityGrid[x][y]]
-        
-        lightsNr = len(self.lights)
-        self.set_onetime_uniforms()
-        self.get_uniform_locations(lightsNr)
-    
-    def set_up_opengl(self):
-
-        glClearColor(0.0, 0.0, 0.0, 1)
-        glEnable(GL_DEPTH_TEST)
-        glEnable(GL_MULTISAMPLE)
-        glEnable(GL_BLEND)
-        glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA)
-        glDepthFunc(GL_LEQUAL)
-        
-        glPatchParameteri(GL_PATCH_VERTICES, 3)
-        OpenGL.ERROR_CHECKING = False
-    
-    def set_onetime_uniforms(self) :
-        
-        projection_transform = pyrr.matrix44.create_perspective_projection_from_bounds(-0.1, 0.1, -0.1*HEIGHT/WIDTH, 0.1*HEIGHT/WIDTH, 0.1, 2000)
-
-        glUseProgram(self.shaders["3D"])
-        glUniformMatrix4fv(3, 1, GL_FALSE, projection_transform)
-        
-        glUseProgram(self.shaders["3D_animated"])
-        glUniformMatrix4fv(5, 1, GL_FALSE, projection_transform)
-        
-        glUseProgram(self.shaders["skybox"])
-        glUniformMatrix4fv(1, 1, GL_FALSE, projection_transform)
-
-        glUseProgram(self.shaders["terrain"])
-        glUniformMatrix4fv(1, 1, GL_FALSE, projection_transform)
-        
-        glUseProgram(self.shaders["grass"])
-        glUniformMatrix4fv(3, 1, GL_FALSE, projection_transform)
+                [self.entityGrid[x][y].append(obj) for x in range(meshmin[0], meshmax[0]+1) for y in range(meshmin[1], meshmax[1]+1) if obj not in self.entityGrid[x][y]]
     
     def jump(self, jump):
         
@@ -393,7 +508,7 @@ class scene:
     
     def movePlayer(self, dPos, frametime):
         
-        movement = pyrr.vector.normalize((dPos[0]*self.player.right + dPos[1]*self.player.forwards))
+        movement = normalize((dPos[0]*self.player.right + dPos[1]*self.player.forwards))
         movement, collisionHeight = self.checkCollision(movement, self.player.position)
         
         self.player.angle(frametime, dPos)
@@ -402,7 +517,7 @@ class scene:
         pos = self.player.position[0:3:2] * 5/2 + 2500
         pos = [int(i) for i in pos]
         
-        heightmap = self.terrain[1][0][0]
+        heightmap = material("gfx/map8.png")
         mapHeight = [heightmap.img[pos[1] + x, pos[0] + y][1]/32 for x, y in [(0, -1), (-1, 0), (0, 0), (1, 0), (0, 1)]]
         angle = [np.arctan(mapHeight[x] - mapHeight[y]) for x, y in [(0, 2), (2, 4), (2, 1), (3, 2)]]
         
@@ -426,7 +541,7 @@ class scene:
         grid = self.entityGrid[int(cell[0])][int(cell[1])]
         for obj in grid:
             
-            meshBoundingBoxes = obj[1][1][0].boundingBox + obj[1][0].position
+            meshBoundingBoxes = obj[1].boundingBox + obj[0].position
             for meshBoundingBox in meshBoundingBoxes:
                 
                 localBoundingBox = meshBoundingBox - pos
@@ -437,7 +552,7 @@ class scene:
                 if localBoundingBox[1][1] < 0.4: continue
                 
                 moveRay = np.array(((0,0,0), movement), dtype=np.float32)
-                collisionPos = pyrr.geometric_tests.ray_intersect_aabb(moveRay, localBoundingBox)
+                collisionPos = ray_intersect_aabb(moveRay, localBoundingBox)
                 if collisionPos is not None:
                     
                     distance = np.linalg.norm(collisionPos)
@@ -470,7 +585,7 @@ class scene:
         for meshBoundingBox in meshBoundingBoxList:
             
             moveRay = np.array(((0,0,0), movement), dtype=np.float32)
-            collisionPos = pyrr.geometric_tests.ray_intersect_aabb(moveRay, meshBoundingBox)
+            collisionPos = ray_intersect_aabb(moveRay, meshBoundingBox)
             if collisionPos is not None:
                 
                 distanceList.append(np.linalg.norm(collisionPos))
@@ -499,142 +614,48 @@ class scene:
     def update(self, fps, time):
         
         self.player.update(fps)
-        self.render(self.entities, self.lights, time)
-    
-    def get_uniform_locations(self, lightsNr):
+        self.render(self.entities, time)
 
-        self.light_locations = [
-        {
-            UNIFORM_TYPE["LIGHT_COLOR"]: [glGetUniformLocation(self.shaders["3D"], f"Lights[{i}].color") for i in range(lightsNr)],
-            UNIFORM_TYPE["LIGHT_POS"]: [glGetUniformLocation(self.shaders["3D"], f"Lights[{i}].position") for i in range(lightsNr)],
-            UNIFORM_TYPE["LIGHT_STRENGTH"]: [glGetUniformLocation(self.shaders["3D"], f"Lights[{i}].strength") for i in range(lightsNr)]
-        },
-        {
-            UNIFORM_TYPE["LIGHT_COLOR"]: [glGetUniformLocation(self.shaders["3D_animated"], f"Lights[{i}].color") for i in range(lightsNr)],
-            UNIFORM_TYPE["LIGHT_POS"]: [glGetUniformLocation(self.shaders["3D_animated"], f"Lights[{i}].position") for i in range(lightsNr)],
-            UNIFORM_TYPE["LIGHT_STRENGTH"]: [glGetUniformLocation(self.shaders["3D_animated"], f"Lights[{i}].strength") for i in range(lightsNr)]
-        }
-        ]
-
-    def render(self, entities, lights, times):
+    def render(self, entities, times):
         
-        pg.display.flip()
-        glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT)
-        glEnable(GL_CULL_FACE)
+        ctx.new_frame()
+        image.clear()
+        depth.clear()
         
         camera = entities[ENTITY_TYPE["player"]][0].camera
-        viewTransform = camera.getViewTransform()
+        view = camera.getViewTransform()
+        viewRow1, viewRow2, viewRow3, viewRow4 = view
         frustum = camera.frustum
-        
-        #draw GUI
-        #glUseProgram(self.shaders["2D"])
-        #GUI.draw()
-        
-        #draw normal entities
-        glUseProgram(self.shaders["3D"])
-        glUniformMatrix4fv(7, 1, GL_FALSE, viewTransform)
-        self.setPointlights(lights, 0)
-        glUniform3fv(15, 1, camera.position)
-        
-        glUseProgram(self.shaders["3D_animated"])
-        glUniformMatrix4fv(9, 1, GL_FALSE, viewTransform)
-        self.setPointlights(lights, 1)
-        glUniform3fv(17, 1, camera.position)
-
-        #draw 3D objects
-        for entity in entities.values():
-
-            mesh, materials = entity[1]
-            
-            pos = entity[0].position
-            rad = entity[0].size
-            
-            if all([vec4[0:3] @ pos - vec4[3] > -rad for vec4 in frustum]):
-                
-                transformMat = np.identity(4)
-                transformMat[0:3,0:3] = pyrr.matrix33.create_from_eulers(entity[0].eulers)
-                transformMat[3,0:3] = pos
-                
-                if mesh.hasJoints:
-                    glUseProgram(self.shaders["3D_animated"])
-                    mesh.pose += 1
-                    mesh.setUniform()
-                    glUniformMatrix4fv(13, 1, GL_FALSE, transformMat)
                     
-                else:
-                    glUseProgram(self.shaders["3D"])
-                    glUniformMatrix4fv(11, 1, GL_FALSE, transformMat)
+        self.entities[ENTITY_TYPE["player"]][1].shaders[0].uniforms['view'][:] = struct.pack('4f4f4f4f', *viewRow1, *viewRow2, *viewRow3, *viewRow4)
+        
+        for entity in entities.values():
+            obj, mesh = entity
+            
+            if all([vec4[0:3] @ obj.position - vec4[3] > -entity[0].size for vec4 in frustum]):
                 
-                mesh.draw(materials)
+                transformMat = create_from_eulers(entity[0].eulers)
+                
+                #if mesh.hasJoints:
+                    #mesh.pose += 1
+                    #mesh.setUniform()
+                
+                transRow1, transRow2, transRow3 = transformMat
+                mesh.draw(struct.pack('4f4f4f4f', *viewRow1, *viewRow2, *viewRow3, *viewRow4), struct.pack('4f4f4f4f', *transRow1, 0, *transRow2, 0, *transRow3, 0, *obj.position, 1))
         
-        #draw terrain
-        glUseProgram(self.shaders["terrain"])
-        glUniformMatrix4fv(5, 1, GL_FALSE, viewTransform)
-        yawMat = camera.getYawMat()
-        glUniformMatrix4fv(9, 1, GL_FALSE, yawMat)
-        self.terrain[0].drawPatches(self.terrain[1])
+        image.blit()
+        ctx.end_frame()
         
-        #for seeing: skybox, both sides of grass
-        glDisable(GL_CULL_FACE)
-        
-        #draw skybox
-        glUseProgram(self.shaders["skybox"])
-        glUniformMatrix4fv(5, 1, GL_FALSE, viewTransform)
-        self.skybox[0].draw(self.skybox[1])
-        
-        #needs to be last for transparency
-        
-        #draw grass
-        #glUseProgram(self.shaders["grass"])
-        #glUniformMatrix4fv(7, 1, GL_FALSE, viewTransform)
-        #glUniform1fv(1, 1, times)
-        #glUniform3fv(11, 1, camera.position)
-        #self.fern[0].drawInstanced(self.fern[1], 1000000)
-
-        glFlush()
-    
-    def setPointlights(self, lights, shaderNr):
-        
-        for i in range(len(lights)):
-
-            light = lights[i]
-
-            glUniform3fv(self.light_locations[shaderNr][UNIFORM_TYPE["LIGHT_POS"]][i], 1, light.position)
-            glUniform3fv(self.light_locations[shaderNr][UNIFORM_TYPE["LIGHT_COLOR"]][i],   1, light.color)
-            glUniform1f(self.light_locations[shaderNr][UNIFORM_TYPE["LIGHT_STRENGTH"]][i],  light.strength)
-    
-    def destroy(self):
-        
-        for entity in self.entities.values():
-            mesh, materialsList = entity[1]
-            mesh.destroy()
-            for materials in materialsList:
-                for material in materials:
-                    material.destroy()
-        
-        self.skybox[0].destroy()
-        for material in self.skybox[1][0]:
-            material.destroy()
-        
-        self.terrain[0].destroy()
-        for material in self.terrain[1][0]:
-            material.destroy()
-        
-        self.fern[0].destroy()
-        for material in self.fern[1][0]:
-            material.destroy()
-        
-        for shader in self.shaders.values():
-            glDeleteProgram(shader)
+        pygame.display.flip()
 
 class game:
     
-    __slots__ = ("window", "renderer", "scene", "sceneNr", "last_time", "frametime", "keys", "scroll", "jump")
+    __slots__ = ("window", "renderer", "scene", "sceneNr", "last_time", "window_time", "frametime", "keys", "scroll", "jump")
 
     def __init__(self):
         
-        pg.mouse.set_visible(False)
-        pg.event.set_grab(True)
+        pygame.mouse.set_visible(False)
+        pygame.event.set_grab(True)
         
         self.jump = 0
         self.scroll = 0
@@ -665,13 +686,13 @@ class game:
         
         result = CONTINUE
         
-        for event in pg.event.get():
-            if event.type == pg.QUIT:
+        for event in pygame.event.get():
+            if event.type == pygame.QUIT:
                 result = EXIT
-            elif event.type == pg.KEYDOWN:
-                if event.key == pg.K_ESCAPE:
+            elif event.type == pygame.KEYDOWN:
+                if event.key == pygame.K_ESCAPE:
                     result = OPEN_MENU
-            elif event.type == pg.MOUSEWHEEL:
+            elif event.type == pygame.MOUSEWHEEL:
                 self.scroll = event.y
         
         self.calculate_framerate()
@@ -685,7 +706,7 @@ class game:
     def handle_keys(self):
 
         dPos = 0
-        keys = pg.key.get_pressed()
+        keys = pygame.key.get_pressed()
 
         if keys[input_map["forwards"]]:
             dPos += np.array([0,1])
@@ -706,17 +727,18 @@ class game:
 
     def handle_mouse(self):
 
-        (x,y) = pg.mouse.get_rel()
+        (x,y) = pygame.mouse.get_rel()
         dEulers = 0.001 * -x * np.array([1,0,0])
         dEulers += 0.001 * -y * np.array([0,1,0])
         self.scene.player.camera.spin(dEulers)
         
-        self.scene.player.camera.zoom += self.scroll/5
+        self.scene.player.camera.zoom -= self.scroll/5
         self.scroll = 0
     
     def set_up_timer(self):
 
-        self.last_time = pg.time.get_ticks()/1000
+        self.last_time = pygame.time.get_ticks()/1000
+        self.window_time = 0
         self.frametime = 0
     
     def calculate_framerate(self):
@@ -726,10 +748,10 @@ class game:
         if framerate != 0:
             self.frametime = 1000/framerate
         
-        time = pg.time.get_ticks()/1000
-        if time - self.last_time > 1:
-            pg.display.set_caption(f"Running at {int(framerate)} fps.")
-            self.last_time = time
+        self.last_time = pygame.time.get_ticks()/1000
+        if self.last_time - self.window_time > 1:
+            pygame.display.set_caption(f"Running at {int(framerate)} fps.")
+            self.window_time = self.last_time
     
     def quit(self):
         
@@ -741,40 +763,35 @@ class game:
             savefile.write(f"{self.sceneNr}\n")
             savefile.write(f"{self.scene.player.position}\n{self.scene.player.eulers}\n")
             savefile.write(f"{self.scene.player.camera.eulers}\n{self.scene.player.camera.zoom}\n")
-            
-        self.scene.destroy()
 
 class menu:
     
     def __init__(self):
         
-        pg.mouse.set_visible(True)
-        pg.event.set_grab(False)
+        pygame.mouse.set_visible(True)
+        pygame.event.set_grab(False)
         
-        glClearColor(0.0, 0.0, 0.0, 1)
-        glDisable(GL_DEPTH_TEST)
         self.set_up_timer()
         self.createObjects()
         self.gameLoop()
     
     def set_up_timer(self):
 
-        self.last_time = pg.time.get_ticks()/1000
+        self.last_time = pygame.time.get_ticks()/1000
         self.frametime = 0
     
     def createObjects(self):
         
-        self.shader = createShader(("shaders/shader_2D/vertex_2D.glsl", "shaders/shader_2D/fragment_2D.glsl"))
         baseTexture = material("gfx/button.png", 0)
         hoverTexture = material("gfx/hoverButton.png", 0)
         
         self.buttons = []
         
-        newGameButton = button((0, 0.3), (0.6, 0.4), baseTexture, hoverTexture, self.shader)
+        newGameButton = button((0, 0.3), (0.6, 0.4), baseTexture, hoverTexture)
         newGameButton.click = newGameClick
         self.buttons.append(newGameButton)
         
-        quitButton = button((0, -0.3), (0.6, 0.4), baseTexture, hoverTexture, self.shader)
+        quitButton = button((0, -0.3), (0.6, 0.4), baseTexture, hoverTexture)
         quitButton.click = quitClick
         self.buttons.append(quitButton)
     
@@ -783,29 +800,25 @@ class menu:
         result = CONTINUE
         click = False
         
-        for event in pg.event.get():
-            if event.type == pg.QUIT:
+        for event in pygame.event.get():
+            if event.type == pygame.QUIT:
                 result = EXIT
-            if event.type == pg.MOUSEBUTTONDOWN:
+            if event.type == pygame.MOUSEBUTTONDOWN:
                 click = True
         
         result = self.handleMouse(click)
         
-        pg.display.flip()
-        glBindFramebuffer(GL_FRAMEBUFFER, 0)
-        glClear(GL_COLOR_BUFFER_BIT)
-        glDisable(GL_DEPTH_TEST)
+        pygame.display.flip()
         
         for button in self.buttons:
             button.draw()
         
-        glFlush()
         self.calculate_framerate()
         
         return result
     
     def handleMouse(self, click):
-        (x,y) = pg.mouse.get_pos()
+        (x,y) = pygame.mouse.get_pos()
         x -= halfWidth
         x /= halfWidth
         y -= halfHeight
@@ -824,9 +837,9 @@ class menu:
         if framerate != 0:
             self.frametime = 1000/framerate
         
-        time = pg.time.get_ticks()/1000
+        time = pygame.time.get_ticks()/1000
         if time - self.last_time > 1:
-            pg.display.set_caption(f"Running at {int(framerate)} fps.")
+            pygame.display.set_caption(f"Running at {int(framerate)} fps.")
             self.last_time = time
     
     def quit(self):
@@ -863,18 +876,17 @@ class button:
         )
         self.vertices = np.array(self.vertices, dtype=np.float32)
         
-        glUseProgram(self.shader)
-        self.vao = glGenVertexArrays(1)
-        glBindVertexArray(self.vao)
-        self.vbo = glGenBuffers(1)
-        glBindBuffer(GL_ARRAY_BUFFER, self.vbo)
-        glBufferData(GL_ARRAY_BUFFER, self.vertices.nbytes, self.vertices, GL_STATIC_DRAW)
+        #self.vao = gl.glGenVertexArrays(1)
+        #gl.glBindVertexArray(self.vao)
+        #self.vbo = gl.glGenBuffers(1)
+        #gl.glBindBuffer(gl.GL_ARRAY_BUFFER, self.vbo)
+        #gl.glBufferData(gl.GL_ARRAY_BUFFER, self.vertices.nbytes, self.vertices, gl.GL_STATIC_DRAW)
         
-        glEnableVertexAttribArray(0)
-        glVertexAttribPointer(0, 2, GL_FLOAT, GL_FALSE, 16, ctypes.c_void_p(0))
+        #gl.glEnableVertexAttribArray(0)
+        #gl.glVertexAttribPointer(0, 2, gl.GL_FLOAT, gl.GL_FALSE, 16, gl.ctypes.c_void_p(0))
         
-        glEnableVertexAttribArray(1)
-        glVertexAttribPointer(1, 2, GL_FLOAT, GL_FALSE, 16, ctypes.c_void_p(8))
+        #gl.glEnableVertexAttribArray(1)
+        #gl.glVertexAttribPointer(1, 2, gl.GL_FLOAT, gl.GL_FALSE, 16, gl.ctypes.c_void_p(8))
     
     def inside(self, pos):
         for i in (0, 1):
@@ -884,11 +896,6 @@ class button:
     
     def handleMouse(self, pos, click):
         
-        glBindBuffer(GL_ARRAY_BUFFER, self.vbo)
-        memoryHandle = glMapBuffer(GL_ARRAY_BUFFER, GL_WRITE_ONLY)
-        ctypes.memmove(ctypes.c_void_p(memoryHandle), ctypes.c_void_p(self.vertices.ctypes.data), self.vertices.nbytes)
-        glUnmapBuffer(GL_ARRAY_BUFFER)
-        
         if self.inside(pos):
             self.texture = self.hoverTexture
             if click:
@@ -896,89 +903,22 @@ class button:
         else:
             self.texture = self.baseTexture
         return CONTINUE
-    
-    def draw(self):
-        
-        glUseProgram(self.shader)
-        glBindVertexArray(self.vao)
-        self.texture.use()
-        glDrawArrays(GL_TRIANGLES, 0, 6)
-    
-    def destroy(self):
-        glDeleteBuffers(1, (self.vbo,))
-        glDeleteVertexArrays(1, (self.vao,))
 
 class material:
     
-    def __init__(self, filepath, textureUnit):
+    def __init__(self, filepath):
         
-        self.textureUnit = textureUnit
-        self.texture = glGenTextures(1)
-        glBindTexture(GL_TEXTURE_2D, self.texture)
-        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_REPEAT)
-        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_REPEAT)
-        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST)
-        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR)
-        
-        img = cv2.imread(filepath, cv2.IMREAD_UNCHANGED)
-        self.img = cv2.cvtColor(img, cv2.COLOR_BGRA2RGBA)
-        image_height, image_width, channels = self.img.shape
-        
-        if img.dtype == np.uint16:
-            glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA16, image_width, image_height, 0, GL_RGBA, GL_UNSIGNED_SHORT, self.img)
-        else:
-            glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, image_width, image_height, 0, GL_RGBA, GL_UNSIGNED_BYTE, self.img)
-        
-        glGenerateMipmap(GL_TEXTURE_2D)
-    
-    def use(self):
-        
-        glActiveTexture(GL_TEXTURE0 + self.textureUnit)
-        glBindTexture(GL_TEXTURE_2D, self.texture)
-    
-    def destroy(self):
-        
-        glDeleteTextures(1, (self.texture,))
-
-class cubeMap:
-    
-    def __init__(self, files, textureUnit):
-        
-        self.textureUnit = textureUnit
-        self.texture = glGenTextures(1)
-        glBindTexture(GL_TEXTURE_CUBE_MAP, self.texture)
-        glTexParameteri(GL_TEXTURE_CUBE_MAP, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE)
-        glTexParameteri(GL_TEXTURE_CUBE_MAP, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE)
-        glTexParameteri(GL_TEXTURE_CUBE_MAP, GL_TEXTURE_WRAP_R, GL_CLAMP_TO_EDGE)
-        glTexParameteri(GL_TEXTURE_CUBE_MAP, GL_TEXTURE_MIN_FILTER, GL_LINEAR)
-        glTexParameteri(GL_TEXTURE_CUBE_MAP, GL_TEXTURE_MAG_FILTER, GL_LINEAR)
-        for i in range(6):
-            img = cv2.imread(files[i], cv2.IMREAD_UNCHANGED)
-            img = cv2.cvtColor(img, cv2.COLOR_BGRA2RGBA)
-            image_height, image_width, channels = img.shape
-            glTexImage2D(GL_TEXTURE_CUBE_MAP_POSITIVE_X + i, 0, GL_RGBA, image_width, image_height, 0, GL_RGBA, GL_UNSIGNED_BYTE, img)
-        glGenerateMipmap(GL_TEXTURE_CUBE_MAP)
-    
-    def use(self):
-        
-        glActiveTexture(GL_TEXTURE0 + self.textureUnit)
-        glBindTexture(GL_TEXTURE_CUBE_MAP, self.texture)
-    
-    def destroy(self):
-        
-        glDeleteTextures(1, (self.texture,))
+        img = pygame.image.load(filepath)
+        img = pygame.transform.flip(img, False, True)
+        pixels = pygame.image.tobytes(img, 'RGBA', True)
+        self.img = ctx.image(img.get_size(), 'rgba8unorm', pixels)
 
 class gltfMesh:
 
-    __slots__ = ("vao", "vertexBuffer", "indexBuffer", "texCoordBuffer", "normalBuffer", "jointBuffer", "weightBuffer", "gltf", "hasNormals", "hasTextures", "hasJoints", "indexCountList", "listLenght", "transformMatrices", "finalMatrices", "pose", "timeData", "boundingBox")
-
-    def __init__(self, filename, shaders=None):
+    def __init__(self, filename, textures):
         
         self.boundingBox, vertexDataList, normalDataList, texCoordDataList, jointDataList, weightDataList, indexDataList, self.indexCountList, nodeHierarchy = [], [], [], [], [], [], [], [], []
         self.hasNormals, self.hasTextures, self.hasJoints, self.pose = 0, 0, 0, 0
-        
-        if shaders is not None:
-            glUseProgram(shaders["3D"])
         
         self.gltf = GLTF2().load(filename)
         
@@ -1002,8 +942,6 @@ class gltfMesh:
                 if mesh.primitives[0].attributes.TEXCOORD_0: self.hasTextures = 1
                 if node.skin is not None:
                     
-                    if shaders is not None:
-                        glUseProgram(shaders["3D_animated"])
                     self.hasJoints = 1
                     skin = self.gltf.skins[node.skin]
                     
@@ -1019,7 +957,7 @@ class gltfMesh:
                         self.createTransformMatrices(self.timeData, animations, animation, transformMatrix)
                         self.createAnimation(skin, animation, parentList, inverseBindData)
                     
-                    glUniformMatrix4fv(18, len(skin.joints), GL_FALSE, np.array(self.finalMatrices[0][0]))
+                    #set uniform to self.finalMatrices[0][0]
                 
                 for primitive in mesh.primitives:
 
@@ -1057,41 +995,12 @@ class gltfMesh:
                         weightDataList.append(weightData)
         
         self.listLenght = len(self.indexCountList)
-        self.createBuffers()
         
-        for i in range(self.listLenght):
-
-            glBindVertexArray(self.vao[i])
-            glBindBuffer(GL_ARRAY_BUFFER, self.vertexBuffer[i])
-            glBufferData(GL_ARRAY_BUFFER, vertexDataList[i].nbytes, vertexDataList[i], GL_STATIC_DRAW)
-            glEnableVertexAttribArray(0)
-            glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, 12, ctypes.c_void_p(0))
-            
-            if self.hasNormals:
-                glBindBuffer(GL_ARRAY_BUFFER, self.normalBuffer[i])
-                glBufferData(GL_ARRAY_BUFFER, normalDataList[i].nbytes, normalDataList[i], GL_STATIC_DRAW)
-                glEnableVertexAttribArray(1)
-                glVertexAttribPointer(1, 3, GL_FLOAT, GL_FALSE, 12, ctypes.c_void_p(0))
-                
-            if self.hasTextures:
-                glBindBuffer(GL_ARRAY_BUFFER, self.texCoordBuffer[i])
-                glBufferData(GL_ARRAY_BUFFER, texCoordDataList[i].nbytes, texCoordDataList[i], GL_STATIC_DRAW)
-                glEnableVertexAttribArray(2)
-                glVertexAttribPointer(2, 2, GL_FLOAT, GL_FALSE, 8, ctypes.c_void_p(0))
-                
-            if self.hasJoints:
-                glBindBuffer(GL_ARRAY_BUFFER, self.jointBuffer[i])
-                glBufferData(GL_ARRAY_BUFFER, jointDataList[i].nbytes, jointDataList[i], GL_STATIC_DRAW)
-                glEnableVertexAttribArray(3)
-                glVertexAttribIPointer(3, 4, GL_UNSIGNED_BYTE, 4, ctypes.c_void_p(0))
-                
-                glBindBuffer(GL_ARRAY_BUFFER, self.weightBuffer[i])
-                glBufferData(GL_ARRAY_BUFFER, weightDataList[i].nbytes, weightDataList[i], GL_STATIC_DRAW)
-                glEnableVertexAttribArray(4)
-                glVertexAttribPointer(4, 4, GL_FLOAT, GL_FALSE, 16, ctypes.c_void_p(0))
-                
-            glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, self.indexBuffer[i])
-            glBufferData(GL_ELEMENT_ARRAY_BUFFER, indexDataList[i].nbytes, indexDataList[i], GL_STATIC_DRAW)
+        #if self.hasJoints:
+        #    self.shaders = [shader3D_animated(ctx.buffer(np.array(vertexDataList[i], dtype=np.float32)), vertexDataList[i].nbytes, ctx.buffer(np.array(normalDataList[i], dtype=np.float32)), ctx.buffer(np.array(texCoordDataList[i], dtype=np.float32)), ctx.buffer(np.array(indexDataList[i], dtype=np.float32)), textures[i].img, filename + str(i)) for i in range(self.listLenght)]
+        
+        #else:
+        self.shaders = [shader3D(vertexDataList[i], vertexDataList[i].nbytes, normalDataList[i], texCoordDataList[i], indexDataList[i], textures[i].img) for i in range(self.listLenght)]
             
     def createNodeHierarchy(self, node):
         
@@ -1123,15 +1032,15 @@ class gltfMesh:
             
             if target.path == "translation":
                 for pose in range(timeData):
-                    transformMatrix[0][pose] = pyrr.matrix44.create_from_translation((samplerData[3*pose], samplerData[3*pose+1], samplerData[3*pose+2]))
+                    transformMatrix[0][pose] = create_from_translation((samplerData[3*pose], samplerData[3*pose+1], samplerData[3*pose+2]))
             
             elif target.path == "rotation":
                 for pose in range(timeData):
-                    transformMatrix[1][pose] = pyrr.matrix44.create_from_quaternion((-samplerData[4*pose], -samplerData[4*pose+1], -samplerData[4*pose+2], samplerData[4*pose+3]))
+                    transformMatrix[1][pose] = create_from_quaternion((-samplerData[4*pose], -samplerData[4*pose+1], -samplerData[4*pose+2], samplerData[4*pose+3]))
 
             elif target.path == "scale":
                 for pose in range(timeData):
-                    transformMatrix[2][pose] = pyrr.matrix44.create_from_scale((samplerData[3*pose], samplerData[3*pose+1], samplerData[3*pose+2]))
+                    transformMatrix[2][pose] = create_from_scale((samplerData[3*pose], samplerData[3*pose+1], samplerData[3*pose+2]))
             
             for pose in range(timeData):
                 self.transformMatrices[animation][pose][target.node] = transformMatrix[2][pose] @ transformMatrix[1][pose] @ transformMatrix[0][pose]
@@ -1142,34 +1051,11 @@ class gltfMesh:
             for pose in range(self.timeData):
                 self.transformMatrices[animation][pose][joint] = self.transformMatrices[animation][pose][joint] @ self.transformMatrices[animation][pose][parentList[joint]]
                 self.finalMatrices[animation][pose][skin.joints.index(joint)] = inverseBindData[skin.joints.index(joint)] @ self.transformMatrices[animation][pose][joint]
-        
-    def createBuffers(self):
-        
-        self.vao = glGenVertexArrays(self.listLenght)
-        self.vertexBuffer, self.indexBuffer = glGenBuffers(self.listLenght), glGenBuffers(self.listLenght)
-        if self.hasNormals:
-            self.normalBuffer = glGenBuffers(self.listLenght)
-        if self.hasTextures:
-            self.texCoordBuffer = glGenBuffers(self.listLenght)
-        if self.hasJoints:
-            self.jointBuffer = glGenBuffers(self.listLenght)
-            self.weightBuffer = glGenBuffers(self.listLenght)
-        
-        if self.listLenght == 1:
-            
-            self.vao, self.vertexBuffer, self.indexBuffer = [self.vao], [self.vertexBuffer], [self.indexBuffer]
-            if self.hasNormals:
-                self.normalBuffer = [self.normalBuffer]
-            if self.hasTextures:
-                self.texCoordBuffer = [self.texCoordBuffer]
-            if self.hasJoints:
-                self.jointBuffer = [self.jointBuffer]
-                self.weightBuffer = [self.weightBuffer]
 
     def createBoundingBox(self, min, max):
         min -= np.array((0.7,0.1,0.7))
         max += np.array((0.7,0.1,0.7))
-        self.boundingBox.append(pyrr.aabb.create_from_bounds(min, max))
+        self.boundingBox.append(np.array([min, max]))
     
     def readAccesor(self, accessor):
         
@@ -1187,76 +1073,25 @@ class gltfMesh:
     
     def setUniform(self):
         animation = np.array(self.finalMatrices[0][round(self.pose//8)%self.timeData])
-        glUniformMatrix4fv(18, len(self.gltf.skins[0].joints), GL_FALSE, animation)
     
-    def draw(self, textures):
+    def draw(self, view, model):
         
-        for i in range(self.listLenght):
-            
-            for texture in textures[i]:
-                texture.use()
-            
-            glBindVertexArray(self.vao[i])
-            glDrawElements(GL_TRIANGLES, self.indexCountList[i], GL_UNSIGNED_SHORT, ctypes.c_void_p(0))
-            
-    def drawPatches(self, textures):
-        
-        for i in range(self.listLenght):
-            
-            for texture in textures[i]:
-                texture.use()
-            
-            glBindVertexArray(self.vao[i])
-            glDrawElements(GL_PATCHES, self.indexCountList[i], GL_UNSIGNED_SHORT, ctypes.c_void_p(0))
-            
-    def drawInstanced(self, textures, instances):
-        
-        for i in range(self.listLenght):
-            
-            for texture in textures[i]:
-                texture.use()
-            
-            glBindVertexArray(self.vao[i])
-            glDrawElementsInstanced(GL_TRIANGLES, self.indexCountList[i], GL_UNSIGNED_SHORT, ctypes.c_void_p(0), instances)
-    
-    def destroy(self):
-
-        glDeleteVertexArrays(self.listLenght, self.vao)
-        glDeleteBuffers(self.listLenght, self.indexBuffer)
-        glDeleteBuffers(self.listLenght, self.vertexBuffer)
-        if self.hasNormals:
-            glDeleteBuffers(self.listLenght, self.normalBuffer)
-        if self.hasTextures:
-            glDeleteBuffers(self.listLenght, self.texCoordBuffer)
-        if self.hasJoints:
-            glDeleteBuffers(self.listLenght, self.jointBuffer)
-            glDeleteBuffers(self.listLenght, self.weightBuffer)            
+        for shader in self.shaders:
+            shader.uniforms['view'][:] = view
+            shader.uniforms['model'][:] = model
+            shader.render()
 
 class boundingBoxMesh:
     
-    def __init__(self):
+    def __init__(self, texture):
         
         self.hasJoints = 0
         vertexData = np.array([0,0,1, 1,0,1, 0,1,1, 1,1,1, 1,0,1, 0,0,1, 1,0,0, 0,0,0, 1,1,1, 1,0,1, 1,1,0, 1,0,0, 0,1,1, 1,1,1, 0,1,0, 1,1,0, 0,0,1, 0,1,1, 0,0,0, 0,1,0, 0,0,0, 0,1,0, 1,0,0, 1,1,0], dtype= np.float32)
-        indexData = np.array([0,1,2, 3,2,1, 4,5,6, 7,6,5, 8,9,10, 11,10,9, 12,13,14, 15,14,13, 16,17,18, 19,18,17, 20,21,22, 23,22,21], dtype= np.uint16)
+        indexData = np.array([0,1,2, 3,2,1, 4,5,6, 7,6,5, 8,9,10, 11,10,9, 12,13,14, 15,14,13, 16,17,18, 19,18,17, 20,21,22, 23,22,21], dtype= np.int32)
         normalData = np.array([0,0,1, 0,0,1, 0,0,1, 0,0,1, 0,-1,0, 0,-1,0, 0,-1,0, 0,-1,0, 1,0,0, 1,0,0, 1,0,0, 1,0,0, 0,1,0, 0,1,0, 0,1,0, 0,1,0, -1,0,0, -1,0,0, -1,0,0, -1,0,0, 0,0,-1, 0,0,-1, 0,0,-1, 0,0,-1], dtype= np.float32)
+        texCoordData = np.array([0,0, 0,0, 0,0, 0,0, 0,0, 0,0, 0,0, 0,0, 0,0, 0,0, 0,0, 0,0, 0,0, 0,0, 0,0, 0,0, 0,0, 0,0, 0,0, 0,0, 0,0, 0,0, 0,0, 0,0], dtype= np.float32)
         
-        self.vao = glGenVertexArrays(1)
-        self.vertexBuffer, self.indexBuffer, self.normalBuffer = glGenBuffers(1), glGenBuffers(1), glGenBuffers(1)
-
-        glBindVertexArray(self.vao)
-        glBindBuffer(GL_ARRAY_BUFFER, self.vertexBuffer)
-        glBufferData(GL_ARRAY_BUFFER, vertexData.nbytes, vertexData, GL_STATIC_DRAW)
-        glEnableVertexAttribArray(0)
-        glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, 12, ctypes.c_void_p(0))
-        
-        glBindBuffer(GL_ARRAY_BUFFER, self.normalBuffer)
-        glBufferData(GL_ARRAY_BUFFER, normalData.nbytes, normalData, GL_STATIC_DRAW)
-        glEnableVertexAttribArray(1)
-        glVertexAttribPointer(1, 3, GL_FLOAT, GL_FALSE, 12, ctypes.c_void_p(0))
-            
-        glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, self.indexBuffer)
-        glBufferData(GL_ELEMENT_ARRAY_BUFFER, indexData.nbytes, indexData, GL_STATIC_DRAW)
+        self.shader = shader3D(vertexData, vertexData.nbytes, normalData, texCoordData, indexData, texture.img)
     
     def updateBoundingBox(self, boundingBox):
         
@@ -1264,29 +1099,15 @@ class boundingBoxMesh:
         vertices = [(x, y, z) for x in xlist for y in ylist for z in zlist]
         vertexData = np.array([vertices[i] for i in (4,5,6,7,5,4,1,0,7,5,3,1,6,7,2,3,4,6,0,2,0,2,1,3)], dtype= np.float32)
         
-        glBindVertexArray(self.vao)
-        glBindBuffer(GL_ARRAY_BUFFER, self.vertexBuffer)
-        glBufferData(GL_ARRAY_BUFFER, vertexData.nbytes, vertexData, GL_STATIC_DRAW)
+    def draw(self, view, model):
         
-    def draw(self, textures):
-        
-        glDisable(GL_CULL_FACE)
-        for texture in textures[0]:
-            texture.use()
-        
-        glBindVertexArray(self.vao)
-        glDrawElements(GL_TRIANGLES, 36, GL_UNSIGNED_SHORT, ctypes.c_void_p(0))
-    
-    def destroy(self):
-        
-        glDeleteVertexArrays(1, [self.vao])
-        glDeleteBuffers(1, [self.indexBuffer])
-        glDeleteBuffers(1, [self.vertexBuffer])
+        self.shader.uniforms['view'][:] = view
+        self.shader.uniforms['model'][:] = model
+        self.shader.render()
 
 #####################################################################################
 
 async def main():
-    setUpPyGame()
     myApp = game()
     result = CONTINUE
     while result == CONTINUE:
