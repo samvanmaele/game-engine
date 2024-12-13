@@ -1,12 +1,4 @@
-# /// script
-# dependencies = [
-#  "numpy",
-#  "asyncio",
-#  "pygame",
-#  "struct",
-#  "zengl",
-# ]
-# ///
+# python -m pygbag --PYBUILD 3.12 --ume_block 0 --template noctx.tmpl .
 
 import numpy as np
 import asyncio
@@ -408,7 +400,7 @@ class scene:
             self.lights = [pointLight([0, 1000, 0], [0, 0, 0], [255,255,255], 500)]
             
             self.entities = {
-                ENTITY_TYPE["player"]:            [self.player,                    gltfMesh("models/vedal987/vedal987.gltf",                             [material("models/vedal987/vedal987.png")])],
+                ENTITY_TYPE["player"]:            [self.player,                    gltfMesh("models/vedal987/vedal987.gltf",                    [material("models/vedal987/vedal987.png")])],
                 ENTITY_TYPE["Camilla's_tent"]:    [entity([-8,663.55,40],20),      gltfMesh("models/V-nexus/Camilla's_tent/Camillas_tent.gltf", [material("models/V-nexus/Camilla's_tent/Camillas_tent.png"),
                                                                                                                                                  material("models/V-nexus/Camilla's_tent/Camillas_tent.png")])],
                 ENTITY_TYPE["drone_factory"]:     [entity([43,660.35,7.775],25),   gltfMesh("models/V-nexus/drone_factory/drone_factory.gltf",  [material("models/V-nexus/drone_factory/drone_factory.png"),
