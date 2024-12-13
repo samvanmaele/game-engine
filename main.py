@@ -399,14 +399,6 @@ class scene:
     
     def __init__(self, sceneNr, playerPos, playerEul, camEul, camZoom):
         
-        """
-        self.skybox = (gltfMesh("models/box 3D model/Box.gltf"), [[cubeMap(["gfx/skybox/skybox_right.png","gfx/skybox/skybox_left.png","gfx/skybox/skybox_top.png","gfx/skybox/skybox_bottom.png","gfx/skybox/skybox_front.png","gfx/skybox/skybox_back.png"], 0)]])
-        
-        self.terrain = (gltfMesh("models/circle2K.gltf"), [[material("gfx/map8.png", 0), material("gfx/sand-v1.png", 1), material("gfx/grass.png", 2)]])
-        
-        self.fern = (gltfMesh("models/grass.gltf"), [[material("gfx/map8.png", 0), material("gfx/grass2D.png", 1)]])
-        """
-        
         self.player = player(playerPos, playerEul, camEul, camZoom)
         self.jumpTime = 0
         self.height = 0
@@ -608,13 +600,12 @@ class scene:
         if index == 2: return np.array((0,0,1))
         if index == 3: return np.array((0,0,-1))
 
-    def update(self, fps, time):
+    def update(self, fps):
         
         self.player.update(fps)
-        self.render(self.entities, time)
+        self.render(self.entities)
 
-    def render(self, entities, times):
-        
+    def render(self, entities):
         ctx.new_frame()
         image.clear()
         depth.clear()
@@ -640,7 +631,6 @@ class scene:
                 transRow1, transRow2, transRow3 = transformMat
                 mesh.draw(struct.pack('4f4f4f4f', *viewRow1, *viewRow2, *viewRow3, *viewRow4), struct.pack('4f4f4f4f', *transRow1, 0, *transRow2, 0, *transRow3, 0, *obj.position, 1))
         
-        pipeline.render()
         image.blit()
         ctx.end_frame()
         
@@ -697,7 +687,7 @@ class game:
         self.handle_keys()
         self.handle_mouse()
         
-        self.scene.update(self.frametime, self.last_time)
+        self.scene.update(self.frametime)
         
         return result
 
@@ -968,48 +958,6 @@ class boundingBoxMesh:
         self.shader.render()
 
 #####################################################################################
-
-pipeline = ctx.pipeline(
-    vertex_shader='''
-        #version 300 es
-        precision highp float;
-
-        vec2 vertices[3] = vec2[](
-            vec2(0.0, 0.8),
-            vec2(-0.866, -0.7),
-            vec2(0.866, -0.7)
-        );
-
-        vec3 colors[3] = vec3[](
-            vec3(1.0, 0.0, 0.0),
-            vec3(0.0, 1.0, 0.0),
-            vec3(0.0, 0.0, 1.0)
-        );
-
-        out vec3 v_color;
-
-        void main() {
-            gl_Position = vec4(vertices[gl_VertexID], 0.0, 1.0);
-            v_color = colors[gl_VertexID];
-        }
-    ''',
-    fragment_shader='''
-        #version 300 es
-        precision highp float;
-
-        in vec3 v_color;
-
-        layout (location = 0) out vec4 out_color;
-
-        void main() {
-            out_color = vec4(v_color, 1.0);
-            out_color.rgb = pow(out_color.rgb, vec3(1.0 / 2.2));
-        }
-    ''',
-    framebuffer=[image],
-    topology='triangles',
-    vertex_count=3,
-)
 
 async def main():
     myApp = game()
