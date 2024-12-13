@@ -1,34 +1,29 @@
-
-p# python -m pygbag --PYBUILD 3.12 --ume_block 0 --template noctx.tmpl .
-
 # /// script
 # dependencies = [
 #  "numpy",
+#  "asyncio",
 #  "pygame",
-#  "pygltflib",
 #  "struct",
 #  "zengl",
-#  "marshmallow"
 # ]
 # ///
 
+import numpy as np
 import asyncio
 import pygame as pygame
-import numpy as np
-from pygltflib import GLTF2
 import struct
 import zengl
 
-HEIGHT, WIDTH = 540, 960
+HEIGHT, WIDTH = 720, 1280
 halfHeight, halfWidth = HEIGHT*0.5, WIDTH*0.5
 
 pygame.init()
-pygame.display.set_mode((WIDTH, HEIGHT), flags=pygame.OPENGL|pygame.DOUBLEBUF)
+pygame.display.set_mode((WIDTH, HEIGHT), flags=pygame.OPENGL)
 
 ctx = zengl.context()
 size = pygame.display.get_window_size()
-image = ctx.image(size, 'rgba8unorm', samples=4)
-depth = ctx.image(size, 'depth24plus', samples=4)
+image = ctx.image(size, 'rgba8unorm', samples=4, texture=False)
+depth = ctx.image(size, 'depth24plus', samples=4, texture=False)
 
 #####################################################################################
 
@@ -236,7 +231,8 @@ def shader3D(vertexBuffer, vertexCount, normBuffer, texBuffer, indexBuffer, text
     
     return ctx.pipeline(
         vertex_shader="""
-            #version 330 core
+            #version 300 es
+            precision highp float;
 
             layout(location = 0) in vec3 vpos;
             layout(location = 1) in vec2 vtex;
@@ -256,17 +252,18 @@ def shader3D(vertexBuffer, vertexCount, normBuffer, texBuffer, indexBuffer, text
             }
         """,
         fragment_shader="""
-            #version 330 core
+            #version 300 es
+            precision highp float;
 
             in vec2 TexCoords;
             uniform sampler2D material;
 
-            layout (location = 0) out vec4 color;
+            layout (location = 0) out vec4 out_color;
 
             void main()
             {
-                color = texture(material, TexCoords);
-                color = pow(color, vec4(0.45));
+                out_color = texture(material, TexCoords);
+                out_color = pow(out_color, vec4(0.45));
             }
         """,
         
@@ -282,7 +279,7 @@ def shader3D(vertexBuffer, vertexCount, normBuffer, texBuffer, indexBuffer, text
         vertex_buffers= [*zengl.bind(ctx.buffer(vertexBuffer), "3f", 0), *zengl.bind(ctx.buffer(texBuffer), "2f", 1)],
         index_buffer= indexB,
         vertex_count= vertexCount,
-        #cull_face= "back",
+        cull_face= "back",
         topology= "triangles"
     )
 
@@ -419,7 +416,7 @@ class scene:
             self.lights = [pointLight([0, 1000, 0], [0, 0, 0], [255,255,255], 500)]
             
             self.entities = {
-                ENTITY_TYPE["player"]:            [self.player,                    gltfMesh("models/vedal987.gltf",                             [material("models/vedal987.png")])],
+                ENTITY_TYPE["player"]:            [self.player,                    gltfMesh("models/vedal987/vedal987.gltf",                             [material("models/vedal987/vedal987.png")])],
                 ENTITY_TYPE["Camilla's_tent"]:    [entity([-8,663.55,40],20),      gltfMesh("models/V-nexus/Camilla's_tent/Camillas_tent.gltf", [material("models/V-nexus/Camilla's_tent/Camillas_tent.png"),
                                                                                                                                                  material("models/V-nexus/Camilla's_tent/Camillas_tent.png")])],
                 ENTITY_TYPE["drone_factory"]:     [entity([43,660.35,7.775],25),   gltfMesh("models/V-nexus/drone_factory/drone_factory.gltf",  [material("models/V-nexus/drone_factory/drone_factory.png"),
@@ -513,7 +510,7 @@ class scene:
         
         self.player.angle(frametime, dPos)
         self.player.move(movement * 0.01 * frametime)
-        
+        """
         pos = self.player.position[0:3:2] * 5/2 + 2500
         pos = [int(i) for i in pos]
         
@@ -528,7 +525,7 @@ class scene:
         self.player.eulers[1] = roll
         
         self.height = max(mapHeight[2] * 31.25/64, collisionHeight) - 0.1
-        
+        """
         if not self.jumpTime:
             self.player.position[1] = self.height
     
@@ -643,6 +640,7 @@ class scene:
                 transRow1, transRow2, transRow3 = transformMat
                 mesh.draw(struct.pack('4f4f4f4f', *viewRow1, *viewRow2, *viewRow3, *viewRow4), struct.pack('4f4f4f4f', *transRow1, 0, *transRow2, 0, *transRow3, 0, *obj.position, 1))
         
+        pipeline.render()
         image.blit()
         ctx.end_frame()
         
@@ -917,163 +915,27 @@ class gltfMesh:
 
     def __init__(self, filename, textures):
         
-        self.boundingBox, vertexDataList, normalDataList, texCoordDataList, jointDataList, weightDataList, indexDataList, self.indexCountList, nodeHierarchy = [], [], [], [], [], [], [], [], []
-        self.hasNormals, self.hasTextures, self.hasJoints, self.pose = 0, 0, 0, 0
+        hasNormals, hasTextures, hasJoints, listLenght = np.loadtxt(filename + "Data", converters=float, dtype=np.int32)
+        self.boundingBox = np.loadtxt(filename + "BoundingBox", converters=float)
+        self.boundingBox = [[self.boundingBox[2*i], self.boundingBox[2*i + 1]] for i in range(listLenght)]
         
-        self.gltf = GLTF2().load(filename)
-        
-        scene = self.gltf.scenes[self.gltf.scene]
-        
-        animations = self.gltf.animations
-        parentList = self.createParentlist()
-        
-        for node in scene.nodes:
-            nodeHierarchy.append(self.createNodeHierarchy(node))
-        
-        for nodes in nodeHierarchy:
-            for nodeNr in nodes:
-
-                node = self.gltf.nodes[nodeNr]
-                
-                if node.mesh == None: continue
-                mesh = self.gltf.meshes[node.mesh]
-                
-                if mesh.primitives[0].attributes.NORMAL:     self.hasNormals = 1
-                if mesh.primitives[0].attributes.TEXCOORD_0: self.hasTextures = 1
-                if node.skin is not None:
-                    
-                    self.hasJoints = 1
-                    skin = self.gltf.skins[node.skin]
-                    
-                    self.timeData = self.readAccesor(self.gltf.accessors[animations[0].samplers[animations[0].channels[0].sampler].input])[1]
-                    inverseBindData = self.readAccesor(self.gltf.accessors[skin.inverseBindMatrices])[0]
-                    inverseBindData = [inverseBindData[i:i + 16].reshape(4,4) for i in range(0, len(inverseBindData), 16)]
-                    
-                    transformMatrix = [[np.identity(4) for pose in range(self.timeData)] for i in range(3)]
-                    self.finalMatrices, self.transformMatrices = [[[[np.identity(4) for node in range(len(self.gltf.nodes))] for pose in range(self.timeData)] for animation in range(len(animations))] for i in range(2)]
-                    
-                    for animation in range(len(animations)):
-                        
-                        self.createTransformMatrices(self.timeData, animations, animation, transformMatrix)
-                        self.createAnimation(skin, animation, parentList, inverseBindData)
-                    
-                    #set uniform to self.finalMatrices[0][0]
-                
-                for primitive in mesh.primitives:
-
-                    vertexAccessor = self.gltf.accessors[primitive.attributes.POSITION]
-                    indexAccessor = self.gltf.accessors[primitive.indices]
-                    if self.hasNormals:
-                        normalAccessor = self.gltf.accessors[primitive.attributes.NORMAL]
-                    if self.hasTextures:
-                        texCoordAccessor = self.gltf.accessors[primitive.attributes.TEXCOORD_0]
-                    if self.hasJoints:
-                        jointAccesor = self.gltf.accessors[primitive.attributes.JOINTS_0]
-                        weightAccesor = self.gltf.accessors[primitive.attributes.WEIGHTS_0]
-                    
-                    self.createBoundingBox(vertexAccessor.min, vertexAccessor.max)
-                    
-                    vertexData, vertexCount = self.readAccesor(vertexAccessor)
-                    indexData, indexCount = self.readAccesor(indexAccessor)
-                    if self.hasNormals:
-                        normalData, normalCount = self.readAccesor(normalAccessor)
-                    if self.hasTextures:
-                        texCoordData, texCoordCount = self.readAccesor(texCoordAccessor)
-                    if self.hasJoints:
-                        jointData, jointCount = self.readAccesor(jointAccesor)
-                        weightData, weightCount = self.readAccesor(weightAccesor)
-                    
-                    vertexDataList.append(vertexData)
-                    self.indexCountList.append(indexCount)
-                    indexDataList.append(indexData)
-                    if self.hasNormals:
-                        normalDataList.append(normalData)
-                    if self.hasTextures:
-                        texCoordDataList.append(texCoordData)
-                    if self.hasJoints:
-                        jointDataList.append(jointData)
-                        weightDataList.append(weightData)
-        
-        self.listLenght = len(self.indexCountList)
+        vertexDataList = [np.loadtxt(filename + "VertexDataList" + str(i), converters=float, dtype=np.float32) for i in range(listLenght)]
+        if hasNormals:
+            normalDataList = [np.loadtxt(filename + "VormalDataList" + str(i), converters=float, dtype=np.float32) for i in range(listLenght)]
+        if hasTextures:
+            texCoordDataList = [np.loadtxt(filename + "TexCoordDataList" + str(i), converters=float, dtype=np.float32) for i in range(listLenght)]
+        if hasJoints:
+            jointDataList = [np.loadtxt(filename + "JointDataList" + str(i), converters=float, dtype=np.float32) for i in range(listLenght)]
+            weightDataList = [np.loadtxt(filename + "WeightDataList" + str(i), converters=float, dtype=np.float32) for i in range(listLenght)]
+        indexDataList = [np.loadtxt(filename + "TndexDataList" + str(i), converters=float, dtype=np.float32) for i in range(listLenght)]
         
         #if self.hasJoints:
-        #    self.shaders = [shader3D_animated(ctx.buffer(np.array(vertexDataList[i], dtype=np.float32)), vertexDataList[i].nbytes, ctx.buffer(np.array(normalDataList[i], dtype=np.float32)), ctx.buffer(np.array(texCoordDataList[i], dtype=np.float32)), ctx.buffer(np.array(indexDataList[i], dtype=np.float32)), textures[i].img, filename + str(i)) for i in range(self.listLenght)]
+            #this shader doesnt work (yet)
+            #self.shaders = [shader3D_animated(ctx.buffer(np.array(vertexDataList[i], dtype=np.float32)), vertexDataList[i].nbytes, ctx.buffer(np.array(normalDataList[i], dtype=np.float32)), ctx.buffer(np.array(texCoordDataList[i], dtype=np.float32)), ctx.buffer(np.array(indexDataList[i], dtype=np.float32)), textures[i].img, filename + str(i)) for i in range(self.listLenght)]
         
         #else:
-        self.shaders = [shader3D(vertexDataList[i], vertexDataList[i].nbytes, normalDataList[i], texCoordDataList[i], indexDataList[i], textures[i].img) for i in range(self.listLenght)]
-            
-    def createNodeHierarchy(self, node):
+        self.shaders = [shader3D(vertexDataList[i], vertexDataList[i].nbytes, normalDataList[i], texCoordDataList[i], indexDataList[i], textures[i].img) for i in range(listLenght)]
         
-        result = [node]
-        children = self.gltf.nodes[node].children
-        if children:
-            for child in children:
-                result.extend(self.createNodeHierarchy(child))
-            
-        return result    
-    
-    def createParentlist(self):
-        
-        nodes = self.gltf.nodes
-        parentList = [None for i in range(len(nodes))]
-        for node in range(len(nodes)):
-            if nodes[node].children is not None:
-                for i in nodes[node].children:
-                    parentList[i] = node
-        return parentList
-
-    def createTransformMatrices(self, timeData, animations, animation, transformMatrix):
-        
-        for i in range(len(animations[animation].channels)):
-            target = animations[animation].channels[i].target
-            sampler = animations[animation].channels[i].sampler
-            samplerOutput = animations[animation].samplers[sampler].output
-            samplerData = self.readAccesor(self.gltf.accessors[samplerOutput])[0]
-            
-            if target.path == "translation":
-                for pose in range(timeData):
-                    transformMatrix[0][pose] = create_from_translation((samplerData[3*pose], samplerData[3*pose+1], samplerData[3*pose+2]))
-            
-            elif target.path == "rotation":
-                for pose in range(timeData):
-                    transformMatrix[1][pose] = create_from_quaternion((-samplerData[4*pose], -samplerData[4*pose+1], -samplerData[4*pose+2], samplerData[4*pose+3]))
-
-            elif target.path == "scale":
-                for pose in range(timeData):
-                    transformMatrix[2][pose] = create_from_scale((samplerData[3*pose], samplerData[3*pose+1], samplerData[3*pose+2]))
-            
-            for pose in range(timeData):
-                self.transformMatrices[animation][pose][target.node] = transformMatrix[2][pose] @ transformMatrix[1][pose] @ transformMatrix[0][pose]
-        
-    def createAnimation(self, skin, animation, parentList, inverseBindData):
-        
-        for joint in skin.joints:
-            for pose in range(self.timeData):
-                self.transformMatrices[animation][pose][joint] = self.transformMatrices[animation][pose][joint] @ self.transformMatrices[animation][pose][parentList[joint]]
-                self.finalMatrices[animation][pose][skin.joints.index(joint)] = inverseBindData[skin.joints.index(joint)] @ self.transformMatrices[animation][pose][joint]
-
-    def createBoundingBox(self, min, max):
-        min -= np.array((0.7,0.1,0.7))
-        max += np.array((0.7,0.1,0.7))
-        self.boundingBox.append(np.array([min, max]))
-    
-    def readAccesor(self, accessor):
-        
-        bufferView = self.gltf.bufferViews[accessor.bufferView]
-        buffer = self.gltf.buffers[bufferView.buffer]
-        data = self.gltf.get_data_from_buffer_uri(buffer.uri)
-        
-        count = accessor.count * ELEMENT_SIZES[accessor.type]
-        struct_type = STRUCT_TYPE[accessor.componentType]
-        value_size = VALUE_SIZE[struct_type.lower()]
-        data = struct.unpack(f'<{count}{struct_type}', data[bufferView.byteOffset + accessor.byteOffset:bufferView.byteOffset + accessor.byteOffset + count * value_size])
-        data = np.array(data, dtype=struct_type)
-        
-        return data, count
-    
-    def setUniform(self):
-        animation = np.array(self.finalMatrices[0][round(self.pose//8)%self.timeData])
-    
     def draw(self, view, model):
         
         for shader in self.shaders:
@@ -1106,6 +968,48 @@ class boundingBoxMesh:
         self.shader.render()
 
 #####################################################################################
+
+pipeline = ctx.pipeline(
+    vertex_shader='''
+        #version 300 es
+        precision highp float;
+
+        vec2 vertices[3] = vec2[](
+            vec2(0.0, 0.8),
+            vec2(-0.866, -0.7),
+            vec2(0.866, -0.7)
+        );
+
+        vec3 colors[3] = vec3[](
+            vec3(1.0, 0.0, 0.0),
+            vec3(0.0, 1.0, 0.0),
+            vec3(0.0, 0.0, 1.0)
+        );
+
+        out vec3 v_color;
+
+        void main() {
+            gl_Position = vec4(vertices[gl_VertexID], 0.0, 1.0);
+            v_color = colors[gl_VertexID];
+        }
+    ''',
+    fragment_shader='''
+        #version 300 es
+        precision highp float;
+
+        in vec3 v_color;
+
+        layout (location = 0) out vec4 out_color;
+
+        void main() {
+            out_color = vec4(v_color, 1.0);
+            out_color.rgb = pow(out_color.rgb, vec3(1.0 / 2.2));
+        }
+    ''',
+    framebuffer=[image],
+    topology='triangles',
+    vertex_count=3,
+)
 
 async def main():
     myApp = game()
