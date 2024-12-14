@@ -8,18 +8,18 @@ Last-Modified: Sun, 24 Nov 2024 17:52:52 GMT
 Access-Control-Allow-Origin: *
 Strict-Transport-Security: max-age=31556952
 ETag: "674367f4-4b8d8a"
-expires: Fri, 13 Dec 2024 00:54:00 GMT
+expires: Sat, 14 Dec 2024 15:11:51 GMT
 Cache-Control: max-age=600
 x-proxy-cache: MISS
-X-GitHub-Request-Id: 3AE8:105270:2A355B:2B3316:675B834F
+X-GitHub-Request-Id: 7B09:19A2AF:16423A8:1675708:675D9DDF
 Accept-Ranges: bytes
 Age: 0
-Date: Fri, 13 Dec 2024 00:44:00 GMT
+Date: Sat, 14 Dec 2024 15:58:05 GMT
 Via: 1.1 varnish
-X-Served-By: cache-bru1480061-BRU
-X-Cache: MISS
+X-Served-By: cache-bru1480042-BRU
+X-Cache: HIT
 X-Cache-Hits: 0
-X-Timer: S1734050641.606395,VS0,VE203
+X-Timer: S1734191885.105959,VS0,VE100
 Vary: Accept-Encoding
-X-Fastly-Request-ID: 6869223ab254cb65b2ebe2ee109d486dd9baa070
+X-Fastly-Request-ID: 401a60de75155b72eb45ce4c7de3bbb658486bee
 
