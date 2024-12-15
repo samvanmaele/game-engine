@@ -170,12 +170,12 @@ def loadGLTF(filename):
     np.savetxt(filename + "BoundingBox", boundingBox, fmt='%d')
     for i in range(listLenght):
         
-        np.savetxt(filename + "VertexDataList" + str(i), vertexDataList[i], fmt='%d')
+        np.savetxt(f"{filename}VertexDataList{i}", vertexDataList[i], fmt='%d')
         if hasNormals:
-            np.savetxt(filename + "VormalDataList" + str(i), normalDataList[i], fmt='%d')
+            np.savetxt(f"{filename}NormalDataList{i}", normalDataList[i], fmt='%d')
         if hasTextures:
-            np.savetxt(filename + "TexCoordDataList" + str(i), texCoordDataList[i], fmt='%d')
+            np.savetxt(f"{filename}TexCoordDataList{i}", texCoordDataList[i], fmt='%d')
         if hasJoints:
-            np.savetxt(filename + "JointDataList" + str(i), jointDataList[i], fmt='%d')
-            np.savetxt(filename + "WeightDataList" + str(i), weightDataList[i], fmt='%d')
-        np.savetxt(filename + "TndexDataList" + str(i), indexDataList[i], fmt='%d')
+            np.savetxt(f"{filename}JointDataList{i}", jointDataList[i], fmt='%d')
+            np.savetxt(f"{filename}WeightDataList{i}", weightDataList[i], fmt='%d')
+        np.savetxt(f"{filename}TndexDataList{i}", indexDataList[i], fmt='%d')
