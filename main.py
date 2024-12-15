@@ -23,7 +23,7 @@ halfHeight, halfWidth = HEIGHT*0.5, WIDTH*0.5
 
 pygame.init()
 pygame.display.set_mode((WIDTH, HEIGHT), flags=pygame.OPENGL|pygame.DOUBLEBUF)
-
+clock = pygame.time.Clock()
 ctx = zengl.context()
 size = pygame.display.get_window_size()
 image = ctx.image(size, 'rgba8unorm', samples= 4)
@@ -65,6 +65,8 @@ ENTITY_TYPE = {"player": 0,
                }
 
 #####################################################################################
+
+#pyrr functions that i copied cuz import pyrr causes long load times in browsers
 
 def create_perspective_projection_from_bounds(left,right,bottom,top,near,far,dtype=None):
     A = (right + left) / (right - left)
@@ -203,8 +205,6 @@ def ray_intersect_aabb(ray, aabb):
 
 projection = create_perspective_projection_from_bounds(-0.1, 0.1, -0.1*HEIGHT/WIDTH, 0.1*HEIGHT/WIDTH, 0.1, 2000)
 
-clock = pygame.time.Clock()
-
 def shader3D(vertexBuffer, vertexCount, normBuffer, texBuffer, indexBuffer, texture):
     
     return ctx.pipeline(
@@ -246,18 +246,15 @@ def shader3D(vertexBuffer, vertexCount, normBuffer, texBuffer, indexBuffer, text
         uniforms={'projection': projection.flatten(), 'view': np.identity(4).flatten(), 'model': np.identity(4).flatten()},
         
         blend={'enable': True, 'src_color': 'src_alpha', 'dst_color': 'one_minus_src_alpha'},
-        
         layout=[{'name': 'material', 'binding': 1}],
-        
         resources=[{'type': 'sampler', 'binding': 1, 'image': texture, 'wrap_x': 'clamp_to_edge', 'wrap_y': 'clamp_to_edge', 'min_filter': 'nearest', 'mag_filter': 'nearest'}],
         
-        framebuffer= [image, depth],
-        vertex_buffers= [*zengl.bind(ctx.buffer(vertexBuffer), "3f", 0),
-                         *zengl.bind(ctx.buffer(texBuffer), "2f", 1)],
+        vertex_buffers= [*zengl.bind(ctx.buffer(vertexBuffer), "3f", 0), *zengl.bind(ctx.buffer(texBuffer), "2f", 1)],
         index_buffer= ctx.buffer(indexBuffer, index= True),
         vertex_count= vertexCount,
         cull_face= "back",
-        topology= "triangles"
+        topology= "triangles",
+        framebuffer= [image, depth]
     )
 
 #####################################################################################
@@ -269,14 +266,6 @@ class entity:
         self.position = np.array(position, dtype=np.float32)
         self.eulers = np.array(eulers, dtype=np.float32)
         self.size = size
-
-class billBoard:
-    
-    def __init__(self, w, h):
-        pass
-        
-    def destroy():
-        pass
 
 class pointLight(entity):
 
@@ -293,7 +282,7 @@ class player(entity):
         super().__init__(position, 0, eulers)
         self.camera = camera(self.position, camEulers, camZoom)
     
-    def update(self, fps):
+    def update(self):
         
         cosX, sinX = self.camera.update(self.position)
 
@@ -315,7 +304,7 @@ class player(entity):
     def move(self, movement):
 
         self.position += movement
-        
+
 class camera(entity):
     
     def __init__(self, position, eulers, camZoom):
@@ -481,9 +470,9 @@ class scene:
             self.player.position[1] = self.jumpStartHeight + jumpheight
             return True
     
-    def movePlayer(self, dPos, frametime):
+    def movePlayer(self, dPos, sprint, frametime):
         
-        movement = normalize((dPos[0]*self.player.right + dPos[1]*self.player.forwards))
+        movement = normalize((dPos[0]*self.player.right + dPos[1]*self.player.forwards)) * (1 + sprint)
         movement, collisionHeight = self.checkCollision(movement, self.player.position)
         
         self.player.angle(frametime, dPos)
@@ -545,7 +534,7 @@ class scene:
             index = distanceList.index(min(distanceList))
             movement = collisionPosList[index]
             movement += self.checkCollision2(movementList[index], meshBoundingBoxList-pos+movement)
-            self.entities[ENTITY_TYPE["bounding_box"]][1][0].updateBoundingBox(meshBoundingBoxList[index])
+            self.entities[ENTITY_TYPE["bounding_box"]][1].updateBoundingBox(meshBoundingBoxList[index])
             
         if heightList:
             collisionHeight = pos[1] + max(heightList)
@@ -585,25 +574,16 @@ class scene:
         if index == 2: return np.array((0,0,1))
         if index == 3: return np.array((0,0,-1))
 
-    def update(self, fps, time):
-        
-        self.player.update(fps)
-        self.render(self.entities, time)
-
-    def render(self, entities, times):
+    def render(self):
         
         ctx.new_frame()
         image.clear()
         depth.clear()
         
-        camera = entities[ENTITY_TYPE["player"]][0].camera
-        view = camera.getViewTransform()
-        frustum = camera.frustum
+        view = self.player.camera.getViewTransform()
+        frustum = self.player.camera.frustum
         
-        pipeline.uniforms['view'][:] = struct.pack('4f4f4f4f', *view.flatten())
-        pipeline.render()
-        
-        for entity in entities.values():
+        for entity in self.entities.values():
             obj, mesh = entity
             
             if all([vec4[0:3] @ obj.position - vec4[3] > -entity[0].size for vec4 in frustum]):
@@ -671,7 +651,8 @@ class game:
         self.handle_keys()
         self.handle_mouse()
         
-        self.scene.update(self.frametime, self.last_time)
+        self.scene.player.update()
+        self.scene.render()
         
         return result
 
@@ -680,6 +661,7 @@ class game:
         dPos = 0
         keys = pygame.key.get_pressed()
 
+        #this method makes it so holding multible keys doesnt prioritize the first one in the row
         if keys[input_map["forwards"]]:
             dPos += np.array([0,1])
         if keys[input_map["left"]]:
@@ -691,11 +673,15 @@ class game:
         if keys[input_map["jump"]]:
             self.jump = True
         
+        #this could have been an if statement but this is cooler
+        sprint = keys[input_map["sprint"]]
+        
+        #the jump code is an ungodly mess, dont touch it if not needed
         if self.jump:
             self.jump = self.scene.jump(self.last_time)
 
         if np.any(dPos):
-            self.scene.movePlayer(dPos, self.frametime)
+            self.scene.movePlayer(dPos, sprint, self.frametime)
 
     def handle_mouse(self):
         
@@ -782,10 +768,10 @@ class menu:
     
     def handleMouse(self, click):
         (x,y) = pygame.mouse.get_pos()
-        x -= halfWidth
-        x /= halfWidth
-        y -= halfHeight
-        y /= -halfHeight
+        x -= WIDTH * 0.5
+        x /= WIDTH * 0.5
+        y -= HEIGHT * 0.5
+        y /= -HEIGHT * 0.5
         
         for button in self.buttons:
             result = button.handleMouse((x,y), click)
@@ -893,19 +879,23 @@ class gltfMesh:
 
     def __init__(self, filename, textures):
         
-        hasNormals, hasTextures, hasJoints, listLenght = np.loadtxt(filename + "Data", converters=float, dtype=np.int32)
-        self.boundingBox = np.loadtxt(filename + "BoundingBox", converters=float)
+        #create the np files with this
+        #import precomputeGLTF
+        #precomputeGLTF.loadGLTF(filename)
+        
+        hasNormals, hasTextures, hasJoints, listLenght = np.loadtxt(f"{filename}Data", converters=float, dtype=np.int32)
+        self.boundingBox = np.loadtxt(f"{filename}BoundingBox", converters=float)
         self.boundingBox = [[self.boundingBox[2*i], self.boundingBox[2*i + 1]] for i in range(listLenght)]
         
-        vertexDataList = [np.loadtxt(filename + "VertexDataList" + str(i), converters=float, dtype=np.float32) for i in range(listLenght)]
+        vertexDataList = [np.loadtxt(f"{filename}VertexDataList{i}", converters=float, dtype=np.float32) for i in range(listLenght)]
         if hasNormals:
-            normalDataList = [np.loadtxt(filename + "VormalDataList" + str(i), converters=float, dtype=np.float32) for i in range(listLenght)]
+            normalDataList = [np.loadtxt(f"{filename}VormalDataList{i}", converters=float, dtype=np.float32) for i in range(listLenght)]
         if hasTextures:
-            texCoordDataList = [np.loadtxt(filename + "TexCoordDataList" + str(i), converters=float, dtype=np.float32) for i in range(listLenght)]
+            texCoordDataList = [np.loadtxt(f"{filename}TexCoordDataList{i}", converters=float, dtype=np.float32) for i in range(listLenght)]
         if hasJoints:
-            jointDataList = [np.loadtxt(filename + "JointDataList" + str(i), converters=float, dtype=np.float32) for i in range(listLenght)]
-            weightDataList = [np.loadtxt(filename + "WeightDataList" + str(i), converters=float, dtype=np.float32) for i in range(listLenght)]
-        indexDataList = [np.loadtxt(filename + "TndexDataList" + str(i), converters=float, dtype=np.int32) for i in range(listLenght)]
+            jointDataList = [np.loadtxt(f"{filename}JointDataList{i}", converters=float, dtype=np.float32) for i in range(listLenght)]
+            weightDataList = [np.loadtxt(f"{filename}WeightDataList{i}", converters=float, dtype=np.float32) for i in range(listLenght)]
+        indexDataList = [np.loadtxt(f"{filename}TndexDataList{i}", converters=float, dtype=np.int32) for i in range(listLenght)]
         
         #if self.hasJoints:
             #this shader doesnt work (yet)
@@ -913,7 +903,13 @@ class gltfMesh:
         
         #else:
         self.shaders = [shader3D(vertexDataList[i], vertexDataList[i].nbytes, normalDataList[i], texCoordDataList[i], indexDataList[i], textures[i].img) for i in range(listLenght)]
+    
+    def setUniform(self):
         
+        for shader in self.shaders:
+            animation = np.array(self.finalMatrices[0][round(self.pose//8)%self.timeData])
+            shader.uniforms['animation'][:] = [struct.pack('4f4f4f4f', *anim.flatten()) for anim in animation]
+    
     def draw(self, view, model):
         
         for shader in self.shaders:
@@ -946,54 +942,6 @@ class boundingBoxMesh:
         self.shader.render()
 
 #####################################################################################
-
-pipeline = ctx.pipeline(
-    vertex_shader='''
-        #version 300 es
-        precision highp float;
-
-        uniform mat4 projection;
-        uniform mat4 view;
-        uniform mat4 model;
-        
-        vec2 vertices[3] = vec2[](
-            vec2(0.0, 0.8),
-            vec2(-0.866, -0.7),
-            vec2(0.866, -0.7)
-        );
-
-        vec3 colors[3] = vec3[](
-            vec3(1.0, 0.0, 0.0),
-            vec3(0.0, 1.0, 0.0),
-            vec3(0.0, 0.0, 1.0)
-        );
-
-        out vec3 v_color;
-
-        void main() {
-            gl_Position = projection * view * model * vec4(vertices[gl_VertexID], 0.0, 1.0);
-            v_color = colors[gl_VertexID];
-        }
-    ''',
-    fragment_shader='''
-        #version 300 es
-        precision highp float;
-
-        in vec3 v_color;
-
-        layout (location = 0) out vec4 out_color;
-
-        void main() {
-            out_color = vec4(v_color, 1.0);
-            out_color.rgb = pow(out_color.rgb, vec3(1.0 / 2.2));
-        }
-    ''',
-    
-    uniforms={'projection': projection.flatten(), 'view': np.identity(4).flatten(), 'model': np.identity(4).flatten()},
-    framebuffer=[image],
-    topology='triangles',
-    vertex_count=3,
-)
 
 async def main():
     myApp = game()
