@@ -6,14 +6,14 @@
 #  "pygame",
 #  "struct",
 #  "zengl",
-#  "opencv-python",
-#  "marshmallow"
+#  "marshmallow",
+#  "opencv-python"
 # ]
 # ///
 
+import numpy as np
 import asyncio
 import pygame as pygame
-import numpy as np
 import struct
 import zengl
 import cv2
@@ -205,7 +205,7 @@ def ray_intersect_aabb(ray, aabb):
 
 projection = create_perspective_projection_from_bounds(-0.1, 0.1, -0.1*HEIGHT/WIDTH, 0.1*HEIGHT/WIDTH, 0.1, 2000)
 
-def shader3D(vertexBuffer, vertexCount, normBuffer, texBuffer, indexBuffer, texture):
+def shader3D(vertexBuffer, normBuffer, texBuffer, texture):
     
     return ctx.pipeline(
         vertex_shader="""
@@ -250,9 +250,44 @@ def shader3D(vertexBuffer, vertexCount, normBuffer, texBuffer, indexBuffer, text
         resources=[{'type': 'sampler', 'binding': 1, 'image': texture, 'wrap_x': 'clamp_to_edge', 'wrap_y': 'clamp_to_edge', 'min_filter': 'nearest', 'mag_filter': 'nearest'}],
         
         vertex_buffers= [*zengl.bind(ctx.buffer(vertexBuffer), "3f", 0), *zengl.bind(ctx.buffer(texBuffer), "2f", 1)],
-        index_buffer= ctx.buffer(indexBuffer, index= True),
-        vertex_count= vertexCount,
+        vertex_count= len(vertexBuffer),
         cull_face= "back",
+        topology= "triangles",
+        framebuffer= [image, depth]
+    )
+
+def shaderBoundingBox():
+    
+    return ctx.pipeline(
+        vertex_shader="""
+            #version 300 es
+            precision highp float;
+            
+            uniform vec3 boundingBox[2];
+            uniform mat4 projection;
+            uniform mat4 view;
+            
+            void main() {
+                gl_Position = projection * view * vec4(boundingBox[gl_VertexID/4].x, boundingBox[(gl_VertexID/2) % 2].y, boundingBox[gl_VertexID % 2].z, 1.0);
+            }
+        """,
+        fragment_shader="""
+            #version 300 es
+            precision highp float;
+            
+            layout (location = 0) out vec4 out_color;
+
+            void main()
+            {
+                out_color = vec4(1,0,0,0.75);
+            }
+        """,
+        
+        uniforms={'projection': projection.flatten(), 'view': np.identity(4).flatten(), 'boundingBox': [[0, 660, -4], [1, 661, -5]]},
+        
+        vertex_count=24,
+        index_buffer= ctx.buffer(np.array([0,1,2,1,2,3, 2,3,6,3,6,8, 6,7,4,7,4,5, 4,5,0,5,0,1]), index= True),
+        #cull_face= "back",
         topology= "triangles",
         framebuffer= [image, depth]
     )
@@ -383,7 +418,7 @@ class scene:
             self.lights = [pointLight([0, 1000, 0], [0, 0, 0], [255,255,255], 500)]
             
             self.entities = {
-                ENTITY_TYPE["player"]:            [self.player,                    gltfMesh("models/vedal987/vedal987.gltf",                             [material("models/vedal987/vedal987.png")])],
+                ENTITY_TYPE["player"]:            [self.player,                    gltfMesh("models/vedal987/vedal987.gltf",                    [material("models/vedal987/vedal987.png")])],
                 ENTITY_TYPE["Camilla's_tent"]:    [entity([-8,663.55,40],20),      gltfMesh("models/V-nexus/Camilla's_tent/Camillas_tent.gltf", [material("models/V-nexus/Camilla's_tent/Camillas_tent.png"),
                                                                                                                                                  material("models/V-nexus/Camilla's_tent/Camillas_tent.png")])],
                 ENTITY_TYPE["drone_factory"]:     [entity([43,660.35,7.775],25),   gltfMesh("models/V-nexus/drone_factory/drone_factory.gltf",  [material("models/V-nexus/drone_factory/drone_factory.png"),
@@ -438,7 +473,7 @@ class scene:
                                                                                                                                                  material("models/V-nexus/vedal's_house/vedals_house.png"),
                                                                                                                                                  material("models/V-nexus/vedal's_house/vedals_house.png"),
                                                                                                                                                  material("models/V-nexus/vedal's_house/vedals_house.png")])],
-                ENTITY_TYPE["bounding_box"]:      [entity([0,0,0],999),            boundingBoxMesh(                                              material("gfx/redA.png"))]
+                ENTITY_TYPE["bounding_box"]:      [entity([0,0,0],999),            boundingBoxMesh(                                              )]
                 }
         
         self.entityGrid = [[[] for j in range(500)] for i in range(500)]
@@ -711,7 +746,7 @@ class game:
     def quit(self):
         
         saveName = "savefile.txt"
-        np.savetxt(saveName, [self.sceneNr, *self.scene.player.position, *self.scene.player.eulers, *self.scene.player.camera.eulers, self.scene.player.camera.zoom], fmt='%d')
+        np.savetxt(saveName, [self.sceneNr, *self.scene.player.position, *self.scene.player.eulers, *self.scene.player.camera.eulers, self.scene.player.camera.zoom], fmt='%f')
 
 class menu:
     
@@ -853,6 +888,7 @@ class button:
             self.texture = self.baseTexture
         return CONTINUE
 
+#spare material, does not support 16bit
 class spareMaterial:
     
     def __init__(self, filepath):
@@ -862,6 +898,7 @@ class spareMaterial:
         pixels = pygame.image.tobytes(img, 'RGBA', True)
         self.img = ctx.image(img.get_size(), 'rgba8unorm', pixels)
 
+#primary material, supports 16bit
 class material:
     
     def __init__(self, filepath):
@@ -880,29 +917,39 @@ class gltfMesh:
     def __init__(self, filename, textures):
         
         #create the np files with this
-        #import precomputeGLTF
-        #precomputeGLTF.loadGLTF(filename)
+        import precomputeGLTF
+        precomputeGLTF.loadGLTF(filename)
         
-        hasNormals, hasTextures, hasJoints, listLenght = np.loadtxt(f"{filename}Data", converters=float, dtype=np.int32)
-        self.boundingBox = np.loadtxt(f"{filename}BoundingBox", converters=float)
+        hasNormals, hasTextures, hasJoints, listLenght = np.loadtxt(f"{filename}Data", dtype=np.int32)
+        self.boundingBox = np.loadtxt(f"{filename}BoundingBox", dtype=np.float32)
         self.boundingBox = [[self.boundingBox[2*i], self.boundingBox[2*i + 1]] for i in range(listLenght)]
         
-        vertexDataList = [np.loadtxt(f"{filename}VertexDataList{i}", converters=float, dtype=np.float32) for i in range(listLenght)]
+        vertexDataList = [np.loadtxt(f"{filename}VertexDataList{i}", dtype=np.float32) for i in range(listLenght)]
         if hasNormals:
-            normalDataList = [np.loadtxt(f"{filename}VormalDataList{i}", converters=float, dtype=np.float32) for i in range(listLenght)]
+            normalDataList = [np.loadtxt(f"{filename}NormalDataList{i}", dtype=np.float32) for i in range(listLenght)]
         if hasTextures:
-            texCoordDataList = [np.loadtxt(f"{filename}TexCoordDataList{i}", converters=float, dtype=np.float32) for i in range(listLenght)]
+            texCoordDataList = [np.loadtxt(f"{filename}TexCoordDataList{i}", dtype=np.float32) for i in range(listLenght)]
         if hasJoints:
-            jointDataList = [np.loadtxt(f"{filename}JointDataList{i}", converters=float, dtype=np.float32) for i in range(listLenght)]
-            weightDataList = [np.loadtxt(f"{filename}WeightDataList{i}", converters=float, dtype=np.float32) for i in range(listLenght)]
-        indexDataList = [np.loadtxt(f"{filename}TndexDataList{i}", converters=float, dtype=np.int32) for i in range(listLenght)]
+            jointDataList = [np.loadtxt(f"{filename}JointDataList{i}", dtype=np.int32) for i in range(listLenght)]
+            weightDataList = [np.loadtxt(f"{filename}WeightDataList{i}", dtype=np.float32) for i in range(listLenght)]
+        indexDataList = [np.loadtxt(f"{filename}IndexDataList{i}", dtype=np.int32) for i in range(listLenght)]
+        
+        #index buffer fix
+        vertexDataList = [np.array([vertexDataList[i][3*j:3*j+3] for j in indexDataList[i]], dtype=np.float32) for i in range(listLenght)]
+        if hasNormals:
+            normalDataList = [np.array([normalDataList[i][3*j:3*j+3] for j in indexDataList[i]], dtype=np.float32) for i in range(listLenght)]
+        if hasTextures:
+            texCoordDataList = [np.array([texCoordDataList[i][2*j:2*j+2] for j in indexDataList[i]], dtype=np.float32) for i in range(listLenght)]
+        if hasJoints:
+            jointDataList = [np.array([jointDataList[i][4*j:4*j+4] for j in indexDataList[i]], dtype=np.int32) for i in range(listLenght)]
+            weightDataList = [np.array([weightDataList[i][4*j:4*j+4] for j in indexDataList[i]], dtype=np.float32) for i in range(listLenght)]
         
         #if self.hasJoints:
             #this shader doesnt work (yet)
             #self.shaders = [shader3D_animated(ctx.buffer(np.array(vertexDataList[i], dtype=np.float32)), vertexDataList[i].nbytes, ctx.buffer(np.array(normalDataList[i], dtype=np.float32)), ctx.buffer(np.array(texCoordDataList[i], dtype=np.float32)), ctx.buffer(np.array(indexDataList[i], dtype=np.float32)), textures[i].img, filename + str(i)) for i in range(self.listLenght)]
         
         #else:
-        self.shaders = [shader3D(vertexDataList[i], vertexDataList[i].nbytes, normalDataList[i], texCoordDataList[i], indexDataList[i], textures[i].img) for i in range(listLenght)]
+        self.shaders = [shader3D(vertexDataList[i], normalDataList[i], texCoordDataList[i], textures[i].img) for i in range(listLenght)]
     
     def setUniform(self):
         
@@ -919,26 +966,29 @@ class gltfMesh:
 
 class boundingBoxMesh:
     
-    def __init__(self, texture):
+    def __init__(self):
         
         self.hasJoints = 0
         vertexData = np.array([0,0,1, 1,0,1, 0,1,1, 1,1,1, 1,0,1, 0,0,1, 1,0,0, 0,0,0, 1,1,1, 1,0,1, 1,1,0, 1,0,0, 0,1,1, 1,1,1, 0,1,0, 1,1,0, 0,0,1, 0,1,1, 0,0,0, 0,1,0, 0,0,0, 0,1,0, 1,0,0, 1,1,0], dtype= np.float32)
         indexData = np.array([0,1,2, 3,2,1, 4,5,6, 7,6,5, 8,9,10, 11,10,9, 12,13,14, 15,14,13, 16,17,18, 19,18,17, 20,21,22, 23,22,21], dtype= np.int32)
         normalData = np.array([0,0,1, 0,0,1, 0,0,1, 0,0,1, 0,-1,0, 0,-1,0, 0,-1,0, 0,-1,0, 1,0,0, 1,0,0, 1,0,0, 1,0,0, 0,1,0, 0,1,0, 0,1,0, 0,1,0, -1,0,0, -1,0,0, -1,0,0, -1,0,0, 0,0,-1, 0,0,-1, 0,0,-1, 0,0,-1], dtype= np.float32)
-        texCoordData = np.array([0,0, 0,0, 0,0, 0,0, 0,0, 0,0, 0,0, 0,0, 0,0, 0,0, 0,0, 0,0, 0,0, 0,0, 0,0, 0,0, 0,0, 0,0, 0,0, 0,0, 0,0, 0,0, 0,0, 0,0], dtype= np.float32)
         
-        self.shader = shader3D(vertexData, vertexData.nbytes, normalData, texCoordData, indexData, texture.img)
+        self.shader = shaderBoundingBox()
     
     def updateBoundingBox(self, boundingBox):
+        
+        #self.shader.uniforms['boundingBox'][:] = struct.pack('3f3f', *boundingBox.flatten())
         
         xlist, ylist, zlist = [(boundingBox[0][i], boundingBox[1][i]) for i in range(3)]
         vertices = [(x, y, z) for x in xlist for y in ylist for z in zlist]
         vertexData = np.array([vertices[i] for i in (4,5,6,7,5,4,1,0,7,5,3,1,6,7,2,3,4,6,0,2,0,2,1,3)], dtype= np.float32)
+        print(len(vertexData))
+        
+        self.shader.uniforms['boundinBox'][:] = struct.pack('3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f', *vertexData.flatten())
         
     def draw(self, view, model):
         
         self.shader.uniforms['view'][:] = struct.pack('4f4f4f4f', *view.flatten())
-        self.shader.uniforms['model'][:] = struct.pack('4f4f4f4f', *model.flatten())
         self.shader.render()
 
 #####################################################################################
