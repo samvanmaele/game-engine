@@ -16,7 +16,11 @@ import asyncio
 import pygame as pygame
 import struct
 import zengl
-import cv2
+#import cv2
+from PIL import Image
+import sys
+
+#if sys.platform == 
 
 HEIGHT, WIDTH = 1080, 1920
 halfHeight, halfWidth = HEIGHT*0.5, WIDTH*0.5
@@ -81,11 +85,9 @@ def create_perspective_projection_from_bounds(left,right,bottom,top,near,far,dty
                      (A,  B,  C, -1.),
                      (0., 0., D,  0.))
     )
-
 def normalize(vec):
     
     return (vec.T  / np.sqrt(np.sum(vec**2,axis=-1))).T
-
 def create_from_eulers(eulers, dtype=None):
     dtype = dtype or eulers.dtype
 
@@ -121,7 +123,6 @@ def create_from_eulers(eulers, dtype=None):
         ],
         dtype=dtype
     )
-
 def create_from_quaternion(quat, dtype=None):
     dtype = dtype
 
@@ -155,20 +156,17 @@ def create_from_quaternion(quat, dtype=None):
         [m20, m21, m22, 0],
         [0,   0,   0,   1]
     ], dtype=dtype)
-
 def create_from_translation(vec, dtype=None):
     
     dtype = dtype
     mat = np.identity(4, dtype=dtype)
     mat[3, 0:3] = vec[:3]
     return mat
-
 def create_from_scale(scale, dtype=None):
     m = np.diagflat([scale[0], scale[1], scale[2], 1.0])
     if dtype:
         m = m.astype(dtype)
     return m
-
 def ray_intersect_aabb(ray, aabb):
     
     direction = ray[1]
@@ -255,7 +253,6 @@ def shader3D(vertexBuffer, normBuffer, texBuffer, texture):
         topology= "triangles",
         framebuffer= [image, depth]
     )
-
 def shaderBoundingBox():
     
     return ctx.pipeline(
@@ -295,7 +292,7 @@ def shaderBoundingBox():
 #####################################################################################
 
 class entity:
-
+    
     def __init__(self, position, size, eulers= [0,0,0]):
         
         self.position = np.array(position, dtype=np.float32)
@@ -371,7 +368,7 @@ class camera(entity):
         return (cosX, sinX)
 
     def getViewTransform(self):
-
+        
         return np.array(((self.right[0], self.up[0], -self.forwards[0], 0),
                          (self.right[1], self.up[1], -self.forwards[1], 0),
                          (self.right[2], self.up[2], -self.forwards[2], 0),
@@ -400,19 +397,11 @@ class scene:
     
     def __init__(self, sceneNr, playerPos, playerEul, camEul, camZoom):
         
-        """
-        self.skybox = (gltfMesh("models/box 3D model/Box.gltf"), [[cubeMap(["gfx/skybox/skybox_right.png","gfx/skybox/skybox_left.png","gfx/skybox/skybox_top.png","gfx/skybox/skybox_bottom.png","gfx/skybox/skybox_front.png","gfx/skybox/skybox_back.png"], 0)]])
-        
-        self.terrain = (gltfMesh("models/circle2K.gltf"), [[material("gfx/map8.png", 0), material("gfx/sand-v1.png", 1), material("gfx/grass.png", 2)]])
-        
-        self.fern = (gltfMesh("models/grass.gltf"), [[material("gfx/map8.png", 0), material("gfx/grass2D.png", 1)]])
-        """
-        
         self.player = player(playerPos, playerEul, camEul, camZoom)
         self.jumpTime = 0
         self.height = 0
         self.heightmap = material("gfx/map8.png")
-
+        
         if sceneNr == 0:
             
             self.lights = [pointLight([0, 1000, 0], [0, 0, 0], [255,255,255], 500)]
@@ -516,7 +505,7 @@ class scene:
         pos = self.player.position[0:3:2] * 5/2 + 2500
         pos = [int(i) for i in pos]
         
-        mapHeight = [self.heightmap.pixels[pos[1] + x, pos[0] + y][1]/32 for x, y in [(0, -1), (-1, 0), (0, 0), (1, 0), (0, 1)]]
+        mapHeight = [self.heightmap.pixels.getpixel((pos[1] + x, pos[0] + y))[1]/32 for x, y in [(0, -1), (-1, 0), (0, 0), (1, 0), (0, 1)]]
         angle = [np.arctan(mapHeight[x] - mapHeight[y]) for x, y in [(0, 2), (2, 4), (2, 1), (3, 2)]]
         
         roll = (angle[0] + angle[1]) * 0.5
@@ -722,7 +711,7 @@ class game:
         
         (x,y) = pygame.mouse.get_rel()
         dEulers = 0.001 * -x * np.array([1,0,0])
-        dEulers += 0.001 * -y * np.array([0,1,0])
+        dEulers -= 0.001 * y * np.array([0,1,0])
         self.scene.player.camera.spin(dEulers)
     
     def set_up_timer(self):
@@ -888,37 +877,20 @@ class button:
             self.texture = self.baseTexture
         return CONTINUE
 
-#spare material, does not support 16bit
-class spareMaterial:
-    
-    def __init__(self, filepath):
-        
-        img = pygame.image.load(filepath)
-        img = pygame.transform.flip(img, False, True)
-        pixels = pygame.image.tobytes(img, 'RGBA', True)
-        self.img = ctx.image(img.get_size(), 'rgba8unorm', pixels)
-
-#primary material, supports 16bit
 class material:
     
     def __init__(self, filepath):
         
-        img = cv2.imread(filepath, cv2.IMREAD_UNCHANGED)
-        self.pixels = cv2.cvtColor(img, cv2.COLOR_BGRA2RGBA)
-        image_height, image_width, channels = self.pixels.shape
-        
-        if img.dtype == np.uint8:
-            self.img = ctx.image((image_width, image_height), 'rgba8unorm', self.pixels)
-        else:
-            self.img = ctx.image((image_width, image_height), 'rgba16uint', self.pixels)
+        self.pixels = Image.open(filepath)
+        self.img = ctx.image(self.pixels.size, 'rgba8unorm', self.pixels.tobytes())
 
 class gltfMesh:
 
     def __init__(self, filename, textures):
         
         #create the np files with this
-        import precomputeGLTF
-        precomputeGLTF.loadGLTF(filename)
+        #import precomputeGLTF
+        #precomputeGLTF.loadGLTF(filename)
         
         hasNormals, hasTextures, hasJoints, listLenght = np.loadtxt(f"{filename}Data", dtype=np.int32)
         self.boundingBox = np.loadtxt(f"{filename}BoundingBox", dtype=np.float32)
@@ -943,7 +915,7 @@ class gltfMesh:
         if hasJoints:
             jointDataList = [np.array([jointDataList[i][4*j:4*j+4] for j in indexDataList[i]], dtype=np.int32) for i in range(listLenght)]
             weightDataList = [np.array([weightDataList[i][4*j:4*j+4] for j in indexDataList[i]], dtype=np.float32) for i in range(listLenght)]
-        
+            
         #if self.hasJoints:
             #this shader doesnt work (yet)
             #self.shaders = [shader3D_animated(ctx.buffer(np.array(vertexDataList[i], dtype=np.float32)), vertexDataList[i].nbytes, ctx.buffer(np.array(normalDataList[i], dtype=np.float32)), ctx.buffer(np.array(texCoordDataList[i], dtype=np.float32)), ctx.buffer(np.array(indexDataList[i], dtype=np.float32)), textures[i].img, filename + str(i)) for i in range(self.listLenght)]
