@@ -260,12 +260,15 @@ def shaderBoundingBox():
             #version 300 es
             precision highp float;
             
+            layout (location = 0) in int vert;
+            
             uniform vec3 boundingBox[2];
             uniform mat4 projection;
             uniform mat4 view;
             
             void main() {
-                gl_Position = projection * view * vec4(boundingBox[gl_VertexID/4].x, boundingBox[(gl_VertexID/2) % 2].y, boundingBox[gl_VertexID % 2].z, 1.0);
+                vec3 pos = vec3(boundingBox[vert%2].x, boundingBox[(vert/2)%2].y, boundingBox[vert/4].z);
+                gl_Position = projection * view * vec4(pos, 1);
             }
         """,
         fragment_shader="""
@@ -276,15 +279,15 @@ def shaderBoundingBox():
 
             void main()
             {
-                out_color = vec4(1,0,0,0.75);
+                out_color = vec4(1,0,0,0.5);
             }
         """,
         
-        uniforms={'projection': projection.flatten(), 'view': np.identity(4).flatten(), 'boundingBox': [[0, 660, -4], [1, 661, -5]]},
-        
-        vertex_count=24,
-        index_buffer= ctx.buffer(np.array([0,1,2,1,2,3, 2,3,6,3,6,8, 6,7,4,7,4,5, 4,5,0,5,0,1]), index= True),
-        #cull_face= "back",
+        uniforms={'projection': projection.flatten(), 'view': np.identity(4).flatten(), 'boundingBox': [[0, 660, -5], [1, 661, -4]]},
+        blend={'enable': True, 'src_color': 'src_alpha', 'dst_color': 'one_minus_src_alpha'},
+        vertex_buffers= zengl.bind(ctx.buffer(np.array([0, 2, 1, 3, 1, 2, 4, 5, 6, 7, 6, 5, 0, 1, 4, 5, 4, 1, 2, 6, 3, 7, 3, 6, 0, 4, 2, 6, 2, 4, 1, 3, 5, 7, 5, 3], dtype=np.int32)), "1i", 0),
+        vertex_count=36,
+        cull_face= "back",
         topology= "triangles",
         framebuffer= [image, depth]
     )
@@ -892,19 +895,19 @@ class gltfMesh:
         #import precomputeGLTF
         #precomputeGLTF.loadGLTF(filename)
         
-        hasNormals, hasTextures, hasJoints, listLenght = np.loadtxt(f"{filename}Data", dtype=np.int32)
-        self.boundingBox = np.loadtxt(f"{filename}BoundingBox", dtype=np.float32)
+        hasNormals, hasTextures, hasJoints, listLenght = np.loadtxt(f"{filename}Data").astype(np.int32)
+        self.boundingBox = np.loadtxt(f"{filename}BoundingBox").astype(np.float32)
         self.boundingBox = [[self.boundingBox[2*i], self.boundingBox[2*i + 1]] for i in range(listLenght)]
         
-        vertexDataList = [np.loadtxt(f"{filename}VertexDataList{i}", dtype=np.float32) for i in range(listLenght)]
+        vertexDataList = [np.loadtxt(f"{filename}VertexDataList{i}").astype(np.float32) for i in range(listLenght)]
         if hasNormals:
-            normalDataList = [np.loadtxt(f"{filename}NormalDataList{i}", dtype=np.float32) for i in range(listLenght)]
+            normalDataList = [np.loadtxt(f"{filename}NormalDataList{i}").astype(np.float32) for i in range(listLenght)]
         if hasTextures:
-            texCoordDataList = [np.loadtxt(f"{filename}TexCoordDataList{i}", dtype=np.float32) for i in range(listLenght)]
+            texCoordDataList = [np.loadtxt(f"{filename}TexCoordDataList{i}").astype(np.float32) for i in range(listLenght)]
         if hasJoints:
-            jointDataList = [np.loadtxt(f"{filename}JointDataList{i}", dtype=np.int32) for i in range(listLenght)]
-            weightDataList = [np.loadtxt(f"{filename}WeightDataList{i}", dtype=np.float32) for i in range(listLenght)]
-        indexDataList = [np.loadtxt(f"{filename}IndexDataList{i}", dtype=np.int32) for i in range(listLenght)]
+            jointDataList = [np.loadtxt(f"{filename}JointDataList{i}").astype(np.int32) for i in range(listLenght)]
+            weightDataList = [np.loadtxt(f"{filename}WeightDataList{i}").astype(np.float32) for i in range(listLenght)]
+        indexDataList = [np.loadtxt(f"{filename}IndexDataList{i}").astype(np.int32) for i in range(listLenght)]
         
         #index buffer fix
         vertexDataList = [np.array([vertexDataList[i][3*j:3*j+3] for j in indexDataList[i]], dtype=np.float32) for i in range(listLenght)]
@@ -949,14 +952,7 @@ class boundingBoxMesh:
     
     def updateBoundingBox(self, boundingBox):
         
-        #self.shader.uniforms['boundingBox'][:] = struct.pack('3f3f', *boundingBox.flatten())
-        
-        xlist, ylist, zlist = [(boundingBox[0][i], boundingBox[1][i]) for i in range(3)]
-        vertices = [(x, y, z) for x in xlist for y in ylist for z in zlist]
-        vertexData = np.array([vertices[i] for i in (4,5,6,7,5,4,1,0,7,5,3,1,6,7,2,3,4,6,0,2,0,2,1,3)], dtype= np.float32)
-        print(len(vertexData))
-        
-        self.shader.uniforms['boundinBox'][:] = struct.pack('3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f3f', *vertexData.flatten())
+        self.shader.uniforms['boundingBox'][:] = struct.pack('3f3f', *boundingBox.flatten())
         
     def draw(self, view, model):
         
