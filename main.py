@@ -270,11 +270,7 @@ def shader3D(vertexBuffer, normBuffer, texBuffer, texture):
             {
                 vec4 baseTex = texture(material, TexCoords);
                 vec3 temp = 0.2 * baseTex.rgb; //ambient
-                
-                for (int i = 0; i < 1; i++)
-                {
-                    temp += calcPointlight(i);
-                }
+                temp += calcPointlight(0);
                 
                 color = pow(vec4(temp, baseTex.a), vec4(0.45));
             }
