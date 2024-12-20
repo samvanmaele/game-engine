@@ -211,18 +211,25 @@ def shader3D(vertexBuffer, normBuffer, texBuffer, texture):
             precision highp float;
             
             layout(location = 0) in vec3 vpos;
-            layout(location = 1) in vec2 vtex;
+            layout(location = 1) in vec3 vnorm;
+            layout(location = 2) in vec2 vtex;
             
             uniform mat4 projection;
             uniform mat4 view;
             uniform mat4 model;
             
             out vec2 TexCoords;
+            out vec3 fragPos;
+            out vec3 fragNorm;
             
             void main()
             {
-                gl_Position = projection * view * model * vec4(vpos, 1.0);
+                vec4 vertPos = model * vec4(vpos, 1.0);
+                
                 TexCoords = vtex;
+                fragPos = vertPos.xyz;
+                fragNorm = (model * vec4(vnorm, 0)).xyz;
+                gl_Position = projection * view * vertPos;
             }
         """,
         fragment_shader="""
@@ -230,24 +237,63 @@ def shader3D(vertexBuffer, normBuffer, texBuffer, texture):
             precision highp float;
             
             in vec2 TexCoords;
+            in vec3 fragPos;
+            in vec3 fragNorm;
+
             uniform sampler2D material;
+            uniform vec3 camPos;
+            uniform vec3 lightposition[1];
+            uniform vec3 lightcolor[1];
+            uniform float lightstrength[1];
             
             layout (location = 0) out vec4 color;
             
+            vec3 calcPointlight(int i)
+            {
+                vec3 baseTexture = texture(material, TexCoords).rgb;
+                vec3 result = vec3(0);
+                
+                vec3 relLightPos = lightposition[i] - fragPos;
+                float distance = length(relLightPos);
+                relLightPos = normalize(relLightPos);
+                
+                vec3 relCamPos = normalize(camPos - fragPos);
+                vec3 halfVec = normalize(relLightPos + relCamPos);
+
+                result += lightcolor[i] * lightstrength[i] * max(0.0, dot(fragNorm, relLightPos)) / (distance * distance) * baseTexture; //diffuse
+                result += lightcolor[i] * lightstrength[i] * pow(max(0.0, dot(fragNorm, halfVec)), 32.0) / (distance * distance); //specular
+
+                return result;
+            }
+            
             void main()
             {
-                color = texture(material, TexCoords);
-                color = pow(color, vec4(0.45));
+                vec4 baseTex = texture(material, TexCoords);
+                vec3 temp = 0.2 * baseTex.rgb; //ambient
+                
+                for (int i = 0; i < 1; i++)
+                {
+                    temp += calcPointlight(i);
+                }
+                
+                color = pow(vec4(temp, baseTex.a), vec4(0.45));
             }
         """,
         
-        uniforms={'projection': projection.flatten(), 'view': np.identity(4).flatten(), 'model': np.identity(4).flatten()},
+        uniforms={'projection': projection.flatten(), 'view': np.identity(4).flatten(), 'model': np.identity(4).flatten(),
+                  'camPos' : [0,0,0],
+                  'lightposition': [[0, 1000, 0]],
+                  'lightcolor': [[255,255,255]],
+                  'lightstrength': [500]},
         
         blend={'enable': True, 'src_color': 'src_alpha', 'dst_color': 'one_minus_src_alpha'},
         layout=[{'name': 'material', 'binding': 1}],
         resources=[{'type': 'sampler', 'binding': 1, 'image': texture, 'wrap_x': 'clamp_to_edge', 'wrap_y': 'clamp_to_edge', 'min_filter': 'nearest', 'mag_filter': 'nearest'}],
         
-        vertex_buffers= [*zengl.bind(ctx.buffer(vertexBuffer), "3f", 0), *zengl.bind(ctx.buffer(texBuffer), "2f", 1)],
+        vertex_buffers= [*zengl.bind(ctx.buffer(vertexBuffer), "3f", 0),
+                         *zengl.bind(ctx.buffer(normBuffer), "3f", 1),
+                         *zengl.bind(ctx.buffer(texBuffer), "2f", 2)],
+        
         vertex_count= len(vertexBuffer),
         cull_face= "back",
         topology= "triangles",
@@ -607,8 +653,9 @@ class scene:
         image.clear()
         depth.clear()
         
-        view = self.player.camera.getViewTransform()
-        frustum = self.player.camera.frustum
+        cam = self.player.camera
+        view = cam.getViewTransform()
+        frustum = cam.frustum
         
         for entity in self.entities.values():
             obj, mesh = entity
@@ -623,7 +670,7 @@ class scene:
                     #mesh.pose += 1
                     #mesh.setUniform()
                 
-                mesh.draw(view, transformMat)
+                mesh.draw(view, transformMat, cam.position)
         
         image.blit(output)
         output.blit()
@@ -932,11 +979,12 @@ class gltfMesh:
             animation = np.array(self.finalMatrices[0][round(self.pose//8)%self.timeData])
             shader.uniforms['animation'][:] = [struct.pack('4f4f4f4f', *anim.flatten()) for anim in animation]
     
-    def draw(self, view, model):
+    def draw(self, view, model, camPos):
         
         for shader in self.shaders:
             shader.uniforms['view'][:] = struct.pack('4f4f4f4f', *view.flatten())
             shader.uniforms['model'][:] = struct.pack('4f4f4f4f', *model.flatten())
+            shader.uniforms['camPos'][:] = struct.pack('3f', *camPos)
             shader.render()
 
 class boundingBoxMesh:
@@ -954,7 +1002,7 @@ class boundingBoxMesh:
         
         self.shader.uniforms['boundingBox'][:] = struct.pack('3f3f', *boundingBox.flatten())
         
-    def draw(self, view, model):
+    def draw(self, view, model, camPos):
         
         self.shader.uniforms['view'][:] = struct.pack('4f4f4f4f', *view.flatten())
         self.shader.render()
