@@ -16,11 +16,7 @@ import asyncio
 import pygame as pygame
 import struct
 import zengl
-#import cv2
 from PIL import Image
-import sys
-
-#if sys.platform == 
 
 HEIGHT, WIDTH = 1080, 1920
 halfHeight, halfWidth = HEIGHT*0.5, WIDTH*0.5
@@ -295,6 +291,125 @@ def shader3D(vertexBuffer, normBuffer, texBuffer, texture):
         topology= "triangles",
         framebuffer= [image, depth]
     )
+
+def shader3Danimated(vertexBuffer, normBuffer, texBuffer, jointDataList, weightDataList, nrJoints, texture):
+    
+    return ctx.pipeline(
+        vertex_shader="""
+            #version 300 es
+            precision highp float;
+            
+            layout(location = 0) in vec3 vpos;
+            layout(location = 1) in vec3 vnorm;
+            layout(location = 2) in vec2 vtex;
+            layout(location = 3) in ivec4 vboneIds; 
+            layout(location = 4) in vec4 vweights;
+            
+            uniform mat4 projection;
+            uniform mat4 view;
+            uniform mat4 model;
+            uniform mat4 animation[50];
+            
+            out vec2 TexCoords;
+            out vec3 fragPos;
+            out vec3 fragNorm;
+            
+            vec4 applyBone(vec4 p)
+            {
+                vec4 result = vec4(0.0);
+                for(int i = 0; i < 4; ++i)
+                {
+                    if(vboneIds[i] >= 100) 
+                    {
+                        result = p;
+                        break;
+                    }
+                    result += vweights[i] * (animation[vboneIds[i]] * p);
+                }
+                return result;
+            }
+            
+            void main()
+            {
+                
+                vec4 position = applyBone(vec4(vpos, 1.0));
+                vec4 normal = normalize(applyBone(vec4(vnorm, 0.0)));
+                
+                vec4 vertPos = model * position;
+                
+                TexCoords = vtex;
+                fragPos = vertPos.xyz;
+                fragNorm = (model * normal).xyz;
+                gl_Position = projection * view * vertPos;
+            }
+        """,
+        fragment_shader="""
+            #version 300 es
+            precision highp float;
+            
+            in vec2 TexCoords;
+            in vec3 fragPos;
+            in vec3 fragNorm;
+
+            uniform sampler2D material;
+            uniform vec3 camPos;
+            uniform vec3 lightposition[1];
+            uniform vec3 lightcolor[1];
+            uniform float lightstrength[1];
+            
+            layout (location = 0) out vec4 color;
+            
+            vec3 calcPointlight(int i)
+            {
+                vec3 baseTexture = texture(material, TexCoords).rgb;
+                vec3 result = vec3(0);
+                
+                vec3 relLightPos = lightposition[i] - fragPos;
+                float distance = length(relLightPos);
+                relLightPos = normalize(relLightPos);
+                
+                vec3 relCamPos = normalize(camPos - fragPos);
+                vec3 halfVec = normalize(relLightPos + relCamPos);
+
+                result += lightcolor[i] * lightstrength[i] * max(0.0, dot(fragNorm, relLightPos)) / (distance * distance) * baseTexture; //diffuse
+                result += lightcolor[i] * lightstrength[i] * pow(max(0.0, dot(fragNorm, halfVec)), 32.0) / (distance * distance); //specular
+
+                return result;
+            }
+            
+            void main()
+            {
+                vec4 baseTex = texture(material, TexCoords);
+                vec3 temp = 0.2 * baseTex.rgb; //ambient
+                temp += calcPointlight(0);
+                
+                color = pow(vec4(temp, baseTex.a), vec4(0.45));
+            }
+        """,
+        
+        uniforms={'projection': projection.flatten(), 'view': np.identity(4).flatten(), 'model': np.identity(4).flatten(),
+                  'animation': [np.identity(4) for i in range(nrJoints)],
+                  'camPos': [0,0,0],
+                  'lightposition': [[0, 1000, 0]],
+                  'lightcolor': [[255,255,255]],
+                  'lightstrength': [500]},
+        
+        blend={'enable': True, 'src_color': 'src_alpha', 'dst_color': 'one_minus_src_alpha'},
+        layout=[{'name': 'material', 'binding': 1}],
+        resources=[{'type': 'sampler', 'binding': 1, 'image': texture, 'wrap_x': 'clamp_to_edge', 'wrap_y': 'clamp_to_edge', 'min_filter': 'nearest', 'mag_filter': 'nearest'}],
+        
+        vertex_buffers= [*zengl.bind(ctx.buffer(vertexBuffer), "3f", 0),
+                         *zengl.bind(ctx.buffer(normBuffer), "3f", 1),
+                         *zengl.bind(ctx.buffer(texBuffer), "2f", 2),
+                         *zengl.bind(ctx.buffer(jointDataList), "4i", 3),
+                         *zengl.bind(ctx.buffer(weightDataList), "4f", 4)],
+        
+        vertex_count= len(vertexBuffer),
+        cull_face= "back",
+        topology= "triangles",
+        framebuffer= [image, depth]
+    )
+
 def shaderBoundingBox():
     
     return ctx.pipeline(
@@ -662,9 +777,9 @@ class scene:
                 transformMat[0:3,0:3] = create_from_eulers(entity[0].eulers)
                 transformMat[3,0:3] = obj.position
                 
-                #if mesh.hasJoints:
-                    #mesh.pose += 1
-                    #mesh.setUniform()
+                if mesh.hasJoints:
+                    mesh.pose += 1
+                    mesh.setUniform()
                 
                 mesh.draw(view, transformMat, cam.position)
         
@@ -935,10 +1050,10 @@ class gltfMesh:
     def __init__(self, filename, textures):
         
         #create the np files with this
-        #import precomputeGLTF
-        #precomputeGLTF.loadGLTF(filename)
+        import precomputeGLTF
+        precomputeGLTF.loadGLTF(filename)
         
-        hasNormals, hasTextures, hasJoints, listLenght = np.loadtxt(f"{filename}Data").astype(np.int32)
+        hasNormals, hasTextures, self.hasJoints, listLenght = np.loadtxt(f"{filename}Data").astype(np.int32)
         self.boundingBox = np.loadtxt(f"{filename}BoundingBox").astype(np.float32)
         self.boundingBox = [[self.boundingBox[2*i], self.boundingBox[2*i + 1]] for i in range(listLenght)]
         
@@ -947,9 +1062,17 @@ class gltfMesh:
             normalDataList = [np.loadtxt(f"{filename}NormalDataList{i}").astype(np.float32) for i in range(listLenght)]
         if hasTextures:
             texCoordDataList = [np.loadtxt(f"{filename}TexCoordDataList{i}").astype(np.float32) for i in range(listLenght)]
-        if hasJoints:
+        if self.hasJoints:
             jointDataList = [np.loadtxt(f"{filename}JointDataList{i}").astype(np.int32) for i in range(listLenght)]
             weightDataList = [np.loadtxt(f"{filename}WeightDataList{i}").astype(np.float32) for i in range(listLenght)]
+            
+            nrAnimations, self.timeData = np.loadtxt(f"{filename}MatData").astype(np.int32)
+            
+            self.transformMat = [np.loadtxt(f"{filename}Anim{i}Matrices").astype(np.float32) for i in range(nrAnimations)]
+            
+            self.nrJoints = len(self.transformMat[0]) // (16 * self.timeData)
+            self.transformMat = [[[self.transformMat[anim][i+j*self.nrJoints : i+j*self.nrJoints+16] for i in range(0, 16*self.nrJoints, 16)] for j in range(0, 16*self.timeData, 16)] for anim in range(nrAnimations)]
+            
         indexDataList = [np.loadtxt(f"{filename}IndexDataList{i}").astype(np.int32) for i in range(listLenght)]
         
         #index buffer fix
@@ -958,22 +1081,21 @@ class gltfMesh:
             normalDataList = [np.array([normalDataList[i][3*j:3*j+3] for j in indexDataList[i]], dtype=np.float32) for i in range(listLenght)]
         if hasTextures:
             texCoordDataList = [np.array([texCoordDataList[i][2*j:2*j+2] for j in indexDataList[i]], dtype=np.float32) for i in range(listLenght)]
-        if hasJoints:
+        if self.hasJoints:
             jointDataList = [np.array([jointDataList[i][4*j:4*j+4] for j in indexDataList[i]], dtype=np.int32) for i in range(listLenght)]
             weightDataList = [np.array([weightDataList[i][4*j:4*j+4] for j in indexDataList[i]], dtype=np.float32) for i in range(listLenght)]
+            self.pose = 0
             
-        #if self.hasJoints:
-            #this shader doesnt work (yet)
-            #self.shaders = [shader3D_animated(ctx.buffer(np.array(vertexDataList[i], dtype=np.float32)), vertexDataList[i].nbytes, ctx.buffer(np.array(normalDataList[i], dtype=np.float32)), ctx.buffer(np.array(texCoordDataList[i], dtype=np.float32)), ctx.buffer(np.array(indexDataList[i], dtype=np.float32)), textures[i].img, filename + str(i)) for i in range(self.listLenght)]
-        
-        #else:
-        self.shaders = [shader3D(vertexDataList[i], normalDataList[i], texCoordDataList[i], textures[i].img) for i in range(listLenght)]
+        if self.hasJoints:
+            self.shaders = [shader3Danimated(vertexDataList[i], normalDataList[i], texCoordDataList[i], jointDataList[i], weightDataList[i], self.nrJoints, textures[i].img) for i in range(listLenght)]
+        else:
+            self.shaders = [shader3D(vertexDataList[i], normalDataList[i], texCoordDataList[i], textures[i].img) for i in range(listLenght)]
     
     def setUniform(self):
         
         for shader in self.shaders:
-            animation = np.array(self.finalMatrices[0][round(self.pose//8)%self.timeData])
-            shader.uniforms['animation'][:] = [struct.pack('4f4f4f4f', *anim.flatten()) for anim in animation]
+            animation = np.array(self.transformMat[0][round(self.pose//8)%self.timeData])
+            shader.uniforms['animation'][:] = struct.pack(f'{self.nrJoints*16}f', *animation.flatten())
     
     def draw(self, view, model, camPos):
         

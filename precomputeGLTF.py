@@ -31,7 +31,23 @@ def createNodeHierarchy(gltf, node):
         for child in children:
             result.extend(createNodeHierarchy(gltf, child))
         
-    return result    
+    return result
+
+def makeAnimation(gltf, node):
+    
+    animations = gltf.animations
+    nrAnimations = len(animations)
+    parentList = createParentlist(gltf)
+    skin = gltf.skins[node.skin]
+    
+    timeData = len(readAccesor(gltf, gltf.accessors[animations[0].samplers[animations[0].channels[0].sampler].input]))
+    inverseBindData = readAccesor(gltf, gltf.accessors[skin.inverseBindMatrices])
+    inverseBindData = [inverseBindData[i:i + 16].reshape(4,4) for i in range(0, len(inverseBindData), 16)]
+    
+    transformMatrices = [createTransformMatrices(gltf, len(gltf.nodes), timeData, animations[animation]) for animation in range(nrAnimations)]
+    finalMatrices = np.array([createAnimation(transformMatrices[animation], timeData, skin.joints, parentList, inverseBindData) for animation in range(nrAnimations)])
+    
+    return finalMatrices, nrAnimations, timeData
 
 def createParentlist(gltf):
     
@@ -43,12 +59,15 @@ def createParentlist(gltf):
                 parentList[i] = node
     return parentList
 
-def createTransformMatrices(gltf, transformMatrices, timeData, animations, animation, transformMatrix):
+def createTransformMatrices(gltf, nrNodes, timeData, animData):
     
-    for i in range(len(animations[animation].channels)):
-        target = animations[animation].channels[i].target
-        sampler = animations[animation].channels[i].sampler
-        samplerOutput = animations[animation].samplers[sampler].output
+    transformMatrices = [[np.identity(4) for node in range(nrNodes)] for pose in range(timeData)]
+    transformMatrix = [[np.identity(4) for pose in range(timeData)] for i in range(3)]
+    
+    for i in range(len(animData.channels)):
+        target = animData.channels[i].target
+        sampler = animData.channels[i].sampler
+        samplerOutput = animData.samplers[sampler].output
         samplerData = readAccesor(gltf, gltf.accessors[samplerOutput])
         
         if target.path == "translation":
@@ -64,14 +83,20 @@ def createTransformMatrices(gltf, transformMatrices, timeData, animations, anima
                 transformMatrix[2][pose] = pyrr.matrix44.create_from_scale((samplerData[3*pose], samplerData[3*pose+1], samplerData[3*pose+2]))
         
         for pose in range(timeData):
-            transformMatrices[animation][pose][target.node] = transformMatrix[2][pose] @ transformMatrix[1][pose] @ transformMatrix[0][pose]
+            transformMatrices[pose][target.node] = transformMatrix[2][pose] @ transformMatrix[1][pose] @ transformMatrix[0][pose]
+            
+    return transformMatrices
     
-def createAnimation(transformMatrices, finalMatrices, timeData, skin, animation, parentList, inverseBindData):
+def createAnimation(transformMatrices, timeData, joints, parentList, inverseBindData):
     
-    for joint in skin.joints:
+    finalMatrices = [[np.identity(4) for node in range(len(joints))] for pose in range(timeData)]
+    
+    for joint in joints:
         for pose in range(timeData):
-            transformMatrices[animation][pose][joint] = transformMatrices[animation][pose][joint] @ transformMatrices[animation][pose][parentList[joint]]
-            finalMatrices[animation][pose][skin.joints.index(joint)] = inverseBindData[skin.joints.index(joint)] @ transformMatrices[animation][pose][joint]
+            transformMatrices[pose][joint] = transformMatrices[pose][joint] @ transformMatrices[pose][parentList[joint]]
+            finalMatrices[pose][joints.index(joint)] = inverseBindData[joints.index(joint)] @ transformMatrices[pose][joint]
+    
+    return finalMatrices
 
 def readAccesor(gltf, accessor):
     
@@ -89,45 +114,28 @@ def readAccesor(gltf, accessor):
 
 def loadGLTF(filename):
     boundingBox, vertexDataList, normalDataList, texCoordDataList, jointDataList, weightDataList, indexDataList, nodeHierarchy = [], [], [], [], [], [], [], []
-    hasNormals, hasTextures, hasJoints, pose = 0, 0, 0, 0
+    hasNormals, hasTextures, hasJoints = 0, 0, 0
 
     gltf = GLTF2().load(filename)
-
     scene = gltf.scenes[gltf.scene]
-    animations = gltf.animations
-    parentList = createParentlist(gltf)
 
     for node in scene.nodes:
         nodeHierarchy.append(createNodeHierarchy(gltf, node))
-
     for nodes in nodeHierarchy:
         for nodeNr in nodes:
 
             node = gltf.nodes[nodeNr]
+            if node.mesh is None: continue
             
-            if node.mesh == None: continue
             mesh = gltf.meshes[node.mesh]
             
-            if mesh.primitives[0].attributes.NORMAL:     hasNormals = 1
-            if mesh.primitives[0].attributes.TEXCOORD_0: hasTextures = 1
+            if mesh.primitives[0].attributes.NORMAL:
+                hasNormals = 1
+            if mesh.primitives[0].attributes.TEXCOORD_0:
+                hasTextures = 1
             if node.skin is not None:
-                
                 hasJoints = 1
-                skin = gltf.skins[node.skin]
-                
-                timeData = len(readAccesor(gltf, gltf.accessors[animations[0].samplers[animations[0].channels[0].sampler].input]))
-                inverseBindData = readAccesor(gltf, gltf.accessors[skin.inverseBindMatrices])
-                inverseBindData = [inverseBindData[i:i + 16].reshape(4,4) for i in range(0, len(inverseBindData), 16)]
-                
-                transformMatrix = [[np.identity(4) for pose in range(timeData)] for i in range(3)]
-                finalMatrices, transformMatrices = [[[[np.identity(4) for node in range(len(gltf.nodes))] for pose in range(timeData)] for animation in range(len(animations))] for i in range(2)]
-                
-                for animation in range(len(animations)):
-                    
-                    createTransformMatrices(gltf, transformMatrices, timeData, animations, animation, transformMatrix)
-                    createAnimation(transformMatrices, finalMatrices, timeData, skin, animation, parentList, inverseBindData)
-                
-                #set uniform to finalMatrices[0][0]
+                finalMatrices, nrAnimations, timeData = makeAnimation(gltf, node)
             
             for primitive in mesh.primitives:
                 
@@ -144,25 +152,15 @@ def loadGLTF(filename):
                 boundingBox.append(vertexAccessor.min - np.array((0.7,0.1,0.7)))
                 boundingBox.append(vertexAccessor.max + np.array((0.7,0.1,0.7)))
                 
-                vertexData = readAccesor(gltf, vertexAccessor)
-                indexData = readAccesor(gltf, indexAccessor)
+                vertexDataList.append(readAccesor(gltf, vertexAccessor))
+                indexDataList.append(readAccesor(gltf, indexAccessor))
                 if hasNormals:
-                    normalData = readAccesor(gltf, normalAccessor)
+                    normalDataList.append(readAccesor(gltf, normalAccessor))
                 if hasTextures:
-                    texCoordData = readAccesor(gltf, texCoordAccessor)
+                    texCoordDataList.append(readAccesor(gltf, texCoordAccessor))
                 if hasJoints:
-                    jointData = readAccesor(gltf, jointAccesor)
-                    weightData = readAccesor(gltf, weightAccesor)
-                
-                vertexDataList.append(vertexData)
-                indexDataList.append(indexData)
-                if hasNormals:
-                    normalDataList.append(normalData)
-                if hasTextures:
-                    texCoordDataList.append(texCoordData)
-                if hasJoints:
-                    jointDataList.append(jointData)
-                    weightDataList.append(weightData)
+                    jointDataList.append(readAccesor(gltf, jointAccesor))
+                    weightDataList.append(readAccesor(gltf, weightAccesor))
     
     listLenght = len(vertexDataList)
     
@@ -179,3 +177,7 @@ def loadGLTF(filename):
             np.savetxt(f"{filename}JointDataList{i}", jointDataList[i], fmt='%i')
             np.savetxt(f"{filename}WeightDataList{i}", weightDataList[i], fmt='%f')
         np.savetxt(f"{filename}IndexDataList{i}", indexDataList[i], fmt='%i')
+    
+    if hasJoints:
+        np.savetxt(f"{filename}MatData", [nrAnimations, timeData], fmt='%i')
+        [np.savetxt(f"{filename}Anim{i}Matrices", finalMatrices[i].flatten(), fmt='%f') for i in range(nrAnimations)]
