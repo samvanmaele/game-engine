@@ -17,9 +17,9 @@ import pygame as pygame
 import struct
 import zengl
 from PIL import Image
+import sys
 
 HEIGHT, WIDTH = 1080, 1920
-halfHeight, halfWidth = HEIGHT*0.5, WIDTH*0.5
 
 pygame.init()
 pygame.display.set_mode((WIDTH, HEIGHT), flags=pygame.OPENGL|pygame.DOUBLEBUF)
@@ -37,7 +37,8 @@ input_map = {'right': pygame.K_d,
              'forwards': pygame.K_w,
              'backwards': pygame.K_s,
              'jump': pygame.K_SPACE,
-             'sprint': pygame.K_LSHIFT}
+             'sprint': pygame.K_LSHIFT,
+             'escape': pygame.K_p}
 
 #####################################################################################
 
@@ -199,6 +200,105 @@ def ray_intersect_aabb(ray, aabb):
 
 projection = create_perspective_projection_from_bounds(-0.1, 0.1, -0.1*HEIGHT/WIDTH, 0.1*HEIGHT/WIDTH, 0.1, 2000)
 
+def shader2D(vertexBuffer, texBuffer, textures):
+    
+    return ctx.pipeline(
+        vertex_shader="""
+            #version 300 es
+            precision highp float;
+            
+            layout(location = 0) in vec2 vpos;
+            layout(location = 1) in vec2 vtex;
+            
+            out vec2 TexCoords;
+            
+            void main()
+            {
+                TexCoords = vtex;
+                gl_Position = vec4(vpos, 0, 1);
+            }
+        """,
+        fragment_shader="""
+            #version 300 es
+            precision highp float;
+            
+            in vec2 TexCoords;
+
+            uniform sampler2D material;
+            
+            layout(location = 0) out vec4 color;
+            
+            void main()
+            {
+                color = texture(material, TexCoords);
+                color = pow(color, vec4(0.45));
+            }
+        """,
+        
+        blend={'enable': True, 'src_color': 'src_alpha', 'dst_color': 'one_minus_src_alpha'},
+        layout=[{'name': 'material[0]', 'binding': 0}, {'name': 'material[1]', 'binding': 1}],
+        resources=[{'type': 'sampler', 'binding': 0, 'image': textures[0], 'wrap_x': 'clamp_to_edge', 'wrap_y': 'clamp_to_edge', 'min_filter': 'nearest', 'mag_filter': 'nearest'},
+                   {'type': 'sampler', 'binding': 1, 'image': textures[1], 'wrap_x': 'clamp_to_edge', 'wrap_y': 'clamp_to_edge', 'min_filter': 'nearest', 'mag_filter': 'nearest'}],
+        
+        vertex_buffers= [*zengl.bind(ctx.buffer(vertexBuffer), "2f", 0),
+                         *zengl.bind(ctx.buffer(texBuffer), "2f", 1)],
+        
+        vertex_count= len(vertexBuffer),
+        cull_face= "back",
+        topology= "triangles",
+        framebuffer= [image, depth]
+    )
+def shader2Danitex(vertexBuffer, texBuffer, texture, frameAmount):
+    
+    texBuffer /= [frameAmount, 1]
+    
+    return ctx.pipeline(
+        vertex_shader="""
+            #version 300 es
+            precision highp float;
+            
+            layout(location = 0) in vec2 vpos;
+            layout(location = 1) in vec2 vtex;
+            uniform float frame;
+            
+            out vec2 TexCoords;
+            
+            void main()
+            {
+                TexCoords = (vtex + vec2(frame, 0));
+                gl_Position = vec4(vpos, 0, 1);
+            }
+        """,
+        fragment_shader="""
+            #version 300 es
+            precision highp float;
+            
+            in vec2 TexCoords;
+            uniform sampler2D material;
+            
+            layout(location = 0) out vec4 color;
+            
+            void main()
+            {
+                color = texture(material, TexCoords);
+                color = pow(color, vec4(0.45));
+            }
+        """,
+        
+        uniforms={'frame': 0},
+        
+        blend={'enable': True, 'src_color': 'src_alpha', 'dst_color': 'one_minus_src_alpha'},
+        layout=[{'name': 'material', 'binding': 0}],
+        resources=[{'type': 'sampler', 'binding': 0, 'image': texture, 'wrap_x': 'clamp_to_edge', 'wrap_y': 'clamp_to_edge', 'min_filter': 'nearest', 'mag_filter': 'nearest'}],
+        
+        vertex_buffers= [*zengl.bind(ctx.buffer(vertexBuffer), "2f", 0),
+                         *zengl.bind(ctx.buffer(texBuffer), "2f", 1)],
+        
+        vertex_count= len(vertexBuffer),
+        cull_face= "back",
+        topology= "triangles",
+        framebuffer= [image, depth]
+    )
 def shader3D(vertexBuffer, normBuffer, texBuffer, texture):
     
     return ctx.pipeline(
@@ -242,7 +342,7 @@ def shader3D(vertexBuffer, normBuffer, texBuffer, texture):
             uniform vec3 lightcolor[1];
             uniform float lightstrength[1];
             
-            layout (location = 0) out vec4 color;
+            layout(location = 0) out vec4 color;
             
             vec3 calcPointlight(int i)
             {
@@ -279,8 +379,8 @@ def shader3D(vertexBuffer, normBuffer, texBuffer, texture):
                   'lightstrength': [500]},
         
         blend={'enable': True, 'src_color': 'src_alpha', 'dst_color': 'one_minus_src_alpha'},
-        layout=[{'name': 'material', 'binding': 1}],
-        resources=[{'type': 'sampler', 'binding': 1, 'image': texture, 'wrap_x': 'clamp_to_edge', 'wrap_y': 'clamp_to_edge', 'min_filter': 'nearest', 'mag_filter': 'nearest'}],
+        layout=[{'name': 'material', 'binding': 0}],
+        resources=[{'type': 'sampler', 'binding': 0, 'image': texture, 'wrap_x': 'clamp_to_edge', 'wrap_y': 'clamp_to_edge', 'min_filter': 'nearest', 'mag_filter': 'nearest'}],
         
         vertex_buffers= [*zengl.bind(ctx.buffer(vertexBuffer), "3f", 0),
                          *zengl.bind(ctx.buffer(normBuffer), "3f", 1),
@@ -291,7 +391,6 @@ def shader3D(vertexBuffer, normBuffer, texBuffer, texture):
         topology= "triangles",
         framebuffer= [image, depth]
     )
-
 def shader3Danimated(vertexBuffer, normBuffer, texBuffer, jointDataList, weightDataList, nrJoints, texture):
     
     return ctx.pipeline(
@@ -409,7 +508,6 @@ def shader3Danimated(vertexBuffer, normBuffer, texBuffer, jointDataList, weightD
         topology= "triangles",
         framebuffer= [image, depth]
     )
-
 def shaderBoundingBox():
     
     return ctx.pipeline(
@@ -827,7 +925,7 @@ class game:
             if event.type == pygame.QUIT:
                 result = EXIT
             elif event.type == pygame.KEYDOWN:
-                if event.key == pygame.K_ESCAPE:
+                if event.key == input_map["escape"]:
                     result = OPEN_MENU
             elif event.type == pygame.MOUSEWHEEL:
                 self.scene.player.camera.zoom -= event.y
@@ -878,91 +976,7 @@ class game:
     def set_up_timer(self):
 
         self.last_time = pygame.time.get_ticks()/1000
-        self.window_time = 0
         self.frametime = 0
-    
-    def calculate_framerate(self):
-
-        clock.tick()
-        framerate = clock.get_fps()
-        if framerate != 0:
-            self.frametime = 1000/framerate
-        
-        self.last_time = pygame.time.get_ticks()/1000
-        if self.last_time - self.window_time > 1:
-            pygame.display.set_caption(f"Running at {int(framerate)} fps.")
-            self.window_time = self.last_time
-    
-    def quit(self):
-        
-        saveName = "savefile.txt"
-        np.savetxt(saveName, [self.sceneNr, *self.scene.player.position, *self.scene.player.eulers, *self.scene.player.camera.eulers, self.scene.player.camera.zoom], fmt='%f')
-
-class menu:
-    
-    def __init__(self):
-        
-        pygame.mouse.set_visible(True)
-        pygame.event.set_grab(False)
-        
-        self.set_up_timer()
-        self.createObjects()
-        self.gameLoop()
-    
-    def set_up_timer(self):
-
-        self.last_time = pygame.time.get_ticks()/1000
-        self.frametime = 0
-    
-    def createObjects(self):
-        
-        baseTexture = material("gfx/button.png", 0)
-        hoverTexture = material("gfx/hoverButton.png", 0)
-        
-        self.buttons = []
-        
-        newGameButton = button((0, 0.3), (0.6, 0.4), baseTexture, hoverTexture)
-        newGameButton.click = newGameClick
-        self.buttons.append(newGameButton)
-        
-        quitButton = button((0, -0.3), (0.6, 0.4), baseTexture, hoverTexture)
-        quitButton.click = quitClick
-        self.buttons.append(quitButton)
-    
-    def gameLoop(self):
-        
-        result = CONTINUE
-        click = False
-        
-        for event in pygame.event.get():
-            if event.type == pygame.QUIT:
-                result = EXIT
-            if event.type == pygame.MOUSEBUTTONDOWN:
-                click = True
-        
-        result = self.handleMouse(click)
-        
-        pygame.display.flip()
-        
-        for button in self.buttons:
-            button.draw()
-        
-        self.calculate_framerate()
-        
-        return result
-    
-    def handleMouse(self, click):
-        (x,y) = pygame.mouse.get_pos()
-        x -= WIDTH * 0.5
-        x /= WIDTH * 0.5
-        y -= HEIGHT * 0.5
-        y /= -HEIGHT * 0.5
-        
-        for button in self.buttons:
-            result = button.handleMouse((x,y), click)
-            if result != CONTINUE:
-                return result
-        return CONTINUE
     
     def calculate_framerate(self):
 
@@ -977,8 +991,97 @@ class menu:
             self.last_time = time
     
     def quit(self):
+        
+        saveName = "savefile.txt"
+        np.savetxt(saveName, [self.sceneNr, *self.scene.player.position, *self.scene.player.eulers, *self.scene.player.camera.eulers, self.scene.player.camera.zoom], fmt='%f')
+
+class menu:
+    
+    def __init__(self):
+        
+        pygame.mouse.set_visible(True)
+        pygame.event.set_grab(False)
+        
+        self.createObjects()
+        self.set_up_timer()
+        self.gameLoop()
+    
+    def createObjects(self):
+        
+        texture = material("gfx/button.png")
+        
+        self.buttons = []
+        
+        newGameButton = button((0, 0.3), (0.6, 0.4), texture, newGameClick)
+        self.buttons.append(newGameButton)
+        
+        if sys.platform != "emscripten":
+            quitButton = button((0, -0.3), (0.6, 0.4), texture, quitClick)
+            self.buttons.append(quitButton)
+    
+    def gameLoop(self):
+        
+        result = CONTINUE
+        click = False
+        
+        for event in pygame.event.get():
+            if event.type == pygame.QUIT:
+                result = EXIT
+            elif event.type == pygame.MOUSEBUTTONDOWN:
+                click = True
+        
+        self.calculate_framerate()
+        result = self.handleMouse(click)
+        
+        ctx.new_frame()
+        image.clear()
+        depth.clear()
+        
         for button in self.buttons:
-            button.destroy()
+            button.draw()
+        
+        image.blit(output)
+        output.blit()
+        ctx.end_frame()
+        
+        pygame.display.flip()
+        
+        return result
+    
+    def handleMouse(self, click):
+        
+        (x,y) = pygame.mouse.get_pos()
+        x -= WIDTH * 0.5
+        x /= WIDTH * 0.5
+        y -= HEIGHT * 0.5
+        y /= -HEIGHT * 0.5
+        
+        for button in self.buttons:
+            result = button.handleMouse((x,y), click)
+            if result != CONTINUE:
+                return result
+        return CONTINUE
+    
+    def set_up_timer(self):
+
+        self.last_time = pygame.time.get_ticks()/1000
+        self.frametime = 0
+    
+    def calculate_framerate(self):
+
+        clock.tick()
+        framerate = clock.get_fps()
+        if framerate != 0:
+            self.frametime = 1000/framerate
+        
+        time = pygame.time.get_ticks()/1000
+        if time - self.last_time > 1:
+            pygame.display.set_caption(f"Running at {int(framerate)} fps.")
+            self.last_time = time
+    
+    def quit(self):
+        
+        pass
 
 #####################################################################################
 
@@ -990,53 +1093,46 @@ def quitClick():
 
 class button:
     
-    def __init__(self, pos, size, baseTexture, hoverTexture, shader):
+    def __init__(self, pos, size, texture, function):
         
-        self.click = None
+        self.click = function
         self.pos = pos
         self.size = size
-        self.baseTexture, self.hoverTexture = baseTexture, hoverTexture
-        self.shader = shader
-        self.halfWidth, self.halfHeight = size[0]/2, size[1]/2
+        self.frameCount = 2
         
-        self.vertices = (
-            pos[0] - self.halfWidth, pos[1] + self.halfHeight, 0, 1,
-            pos[0] - self.halfWidth, pos[1] - self.halfHeight, 0, 0,
-            pos[0] + self.halfWidth, pos[1] - self.halfHeight, 1, 0,
-            
-            pos[0] - self.halfWidth, pos[1] + self.halfHeight, 0, 1,
-            pos[0] + self.halfWidth, pos[1] - self.halfHeight, 1, 0,
-            pos[0] + self.halfWidth, pos[1] + self.halfHeight, 1, 1
-        )
-        self.vertices = np.array(self.vertices, dtype=np.float32)
+        vertices = np.array([[pos[0] - self.size[0]*0.5, pos[1] + self.size[1]*0.5],
+                             [pos[0] - self.size[0]*0.5, pos[1] - self.size[1]*0.5],
+                             [pos[0] + self.size[0]*0.5, pos[1] - self.size[1]*0.5],
+                             
+                             [pos[0] - self.size[0]*0.5, pos[1] + self.size[1]*0.5],
+                             [pos[0] + self.size[0]*0.5, pos[1] - self.size[1]*0.5],
+                             [pos[0] + self.size[0]*0.5, pos[1] + self.size[1]*0.5]], dtype=np.float32)
         
-        #self.vao = gl.glGenVertexArrays(1)
-        #gl.glBindVertexArray(self.vao)
-        #self.vbo = gl.glGenBuffers(1)
-        #gl.glBindBuffer(gl.GL_ARRAY_BUFFER, self.vbo)
-        #gl.glBufferData(gl.GL_ARRAY_BUFFER, self.vertices.nbytes, self.vertices, gl.GL_STATIC_DRAW)
+        texCoords = np.array([[0,1], [0,0], [1,0], [0,1], [1,0], [1,1]], dtype=np.float32)
         
-        #gl.glEnableVertexAttribArray(0)
-        #gl.glVertexAttribPointer(0, 2, gl.GL_FLOAT, gl.GL_FALSE, 16, gl.ctypes.c_void_p(0))
-        
-        #gl.glEnableVertexAttribArray(1)
-        #gl.glVertexAttribPointer(1, 2, gl.GL_FLOAT, gl.GL_FALSE, 16, gl.ctypes.c_void_p(8))
+        self.shader = shader2Danitex(vertices, texCoords, texture.img, self.frameCount)
     
-    def inside(self, pos):
-        for i in (0, 1):
-            if pos[i] < (self.pos[i] - self.size[i]*0.5) or pos[i] > (self.pos[i] + self.size[i]*0.5):
-                return False
-        return True
+    def draw(self):
+        
+        self.shader.render()
     
     def handleMouse(self, pos, click):
         
         if self.inside(pos):
-            self.texture = self.hoverTexture
+            self.shader.uniforms['frame'][:] = struct.pack("1f", 1 / self.frameCount)
             if click:
                 return self.click()
         else:
-            self.texture = self.baseTexture
+            self.shader.uniforms['frame'][:] = struct.pack("1f", 0 / self.frameCount)
+        
         return CONTINUE
+    
+    def inside(self, pos):
+        
+        for i in (0, 1):
+            if pos[i] < (self.pos[i] - self.size[i]*0.5) or pos[i] > (self.pos[i] + self.size[i]*0.5):
+                return False
+        return True
 
 class material:
     
@@ -1050,43 +1146,38 @@ class gltfMesh:
     def __init__(self, filename, textures):
         
         #create the np files with this
-        import precomputeGLTF
-        precomputeGLTF.loadGLTF(filename)
+        #import precomputeGLTF
+        #precomputeGLTF.loadGLTF(filename)
         
         hasNormals, hasTextures, self.hasJoints, listLenght = np.loadtxt(f"{filename}Data").astype(np.int32)
         self.boundingBox = np.loadtxt(f"{filename}BoundingBox").astype(np.float32)
         self.boundingBox = [[self.boundingBox[2*i], self.boundingBox[2*i + 1]] for i in range(listLenght)]
         
+        indexDataList = [np.loadtxt(f"{filename}IndexDataList{i}").astype(np.int32) for i in range(listLenght)]
+        
         vertexDataList = [np.loadtxt(f"{filename}VertexDataList{i}").astype(np.float32) for i in range(listLenght)]
+        vertexDataList = [np.array([vertexDataList[i][3*j:3*j+3] for j in indexDataList[i]], dtype=np.float32) for i in range(listLenght)]
+        
         if hasNormals:
             normalDataList = [np.loadtxt(f"{filename}NormalDataList{i}").astype(np.float32) for i in range(listLenght)]
+            normalDataList = [np.array([normalDataList[i][3*j:3*j+3] for j in indexDataList[i]], dtype=np.float32) for i in range(listLenght)]
+        
         if hasTextures:
             texCoordDataList = [np.loadtxt(f"{filename}TexCoordDataList{i}").astype(np.float32) for i in range(listLenght)]
+            texCoordDataList = [np.array([texCoordDataList[i][2*j:2*j+2] for j in indexDataList[i]], dtype=np.float32) for i in range(listLenght)]
+        
         if self.hasJoints:
             jointDataList = [np.loadtxt(f"{filename}JointDataList{i}").astype(np.int32) for i in range(listLenght)]
+            jointDataList = [np.array([jointDataList[i][4*j:4*j+4] for j in indexDataList[i]], dtype=np.int32) for i in range(listLenght)]
             weightDataList = [np.loadtxt(f"{filename}WeightDataList{i}").astype(np.float32) for i in range(listLenght)]
+            weightDataList = [np.array([weightDataList[i][4*j:4*j+4] for j in indexDataList[i]], dtype=np.float32) for i in range(listLenght)]
             
+            self.pose = 0
             nrAnimations, self.timeData = np.loadtxt(f"{filename}MatData").astype(np.int32)
-            
             self.transformMat = [np.loadtxt(f"{filename}Anim{i}Matrices").astype(np.float32) for i in range(nrAnimations)]
-            
             self.nrJoints = len(self.transformMat[0]) // (16 * self.timeData)
             self.transformMat = [[[self.transformMat[anim][i+j*self.nrJoints : i+j*self.nrJoints+16] for i in range(0, 16*self.nrJoints, 16)] for j in range(0, 16*self.timeData, 16)] for anim in range(nrAnimations)]
             
-        indexDataList = [np.loadtxt(f"{filename}IndexDataList{i}").astype(np.int32) for i in range(listLenght)]
-        
-        #index buffer fix
-        vertexDataList = [np.array([vertexDataList[i][3*j:3*j+3] for j in indexDataList[i]], dtype=np.float32) for i in range(listLenght)]
-        if hasNormals:
-            normalDataList = [np.array([normalDataList[i][3*j:3*j+3] for j in indexDataList[i]], dtype=np.float32) for i in range(listLenght)]
-        if hasTextures:
-            texCoordDataList = [np.array([texCoordDataList[i][2*j:2*j+2] for j in indexDataList[i]], dtype=np.float32) for i in range(listLenght)]
-        if self.hasJoints:
-            jointDataList = [np.array([jointDataList[i][4*j:4*j+4] for j in indexDataList[i]], dtype=np.int32) for i in range(listLenght)]
-            weightDataList = [np.array([weightDataList[i][4*j:4*j+4] for j in indexDataList[i]], dtype=np.float32) for i in range(listLenght)]
-            self.pose = 0
-            
-        if self.hasJoints:
             self.shaders = [shader3Danimated(vertexDataList[i], normalDataList[i], texCoordDataList[i], jointDataList[i], weightDataList[i], self.nrJoints, textures[i].img) for i in range(listLenght)]
         else:
             self.shaders = [shader3D(vertexDataList[i], normalDataList[i], texCoordDataList[i], textures[i].img) for i in range(listLenght)]
@@ -1110,10 +1201,6 @@ class boundingBoxMesh:
     def __init__(self):
         
         self.hasJoints = 0
-        vertexData = np.array([0,0,1, 1,0,1, 0,1,1, 1,1,1, 1,0,1, 0,0,1, 1,0,0, 0,0,0, 1,1,1, 1,0,1, 1,1,0, 1,0,0, 0,1,1, 1,1,1, 0,1,0, 1,1,0, 0,0,1, 0,1,1, 0,0,0, 0,1,0, 0,0,0, 0,1,0, 1,0,0, 1,1,0], dtype= np.float32)
-        indexData = np.array([0,1,2, 3,2,1, 4,5,6, 7,6,5, 8,9,10, 11,10,9, 12,13,14, 15,14,13, 16,17,18, 19,18,17, 20,21,22, 23,22,21], dtype= np.int32)
-        normalData = np.array([0,0,1, 0,0,1, 0,0,1, 0,0,1, 0,-1,0, 0,-1,0, 0,-1,0, 0,-1,0, 1,0,0, 1,0,0, 1,0,0, 1,0,0, 0,1,0, 0,1,0, 0,1,0, 0,1,0, -1,0,0, -1,0,0, -1,0,0, -1,0,0, 0,0,-1, 0,0,-1, 0,0,-1, 0,0,-1], dtype= np.float32)
-        
         self.shader = shaderBoundingBox()
     
     def updateBoundingBox(self, boundingBox):
