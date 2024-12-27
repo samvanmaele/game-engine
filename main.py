@@ -36,10 +36,6 @@ image = ctx.image(size, 'rgba8unorm', samples= 4)
 depth = ctx.image(size, 'depth24plus', samples= 4)
 output = ctx.image(size, 'rgba8unorm')
 
-textfont = pygame.font.SysFont('consolas', 50)
-text_font = textfont.render("EEEEEEEEE", True, (255,255,255))
-text_surface = text_font.get_rect(center = (960, 540))
-
 #####################################################################################
 
 input_map = {'right': pygame.K_d,
@@ -744,8 +740,6 @@ class scene:
                 meshmin, meshmax = [list(map(int, vec3[::2])) for vec3 in meshBoundingBox/4 + 250]
                 [self.entityGrid[x][y].append(obj) for x in range(meshmin[0], meshmax[0]+1) for y in range(meshmin[1], meshmax[1]+1) if obj not in self.entityGrid[x][y]]
     
-        #self.text = text("eeeee", (100, 100))
-        
     def jump(self, jump):
         
         if not self.jumpTime:
@@ -895,9 +889,6 @@ class scene:
         image.blit(output)
         output.blit()
         ctx.end_frame()
-        
-        screen.blit(text_font, text_surface)
-        
         pygame.display.flip()
 
 class game:
@@ -1104,32 +1095,6 @@ def newGameClick():
 
 def quitClick():
     return EXIT
-
-class text:
-    
-    def __init__(self, text, pos):
-        
-        text = textfont.render(text, True, (255, 255, 255))
-        Pixels = pygame.image.tobytes(text, 'RGBA', True)
-        size = text.get_size()
-        img = ctx.image(size, "rgba8unorm", Pixels)
-        
-        text_surface = self.font.render(self.text, True, self.text_hover_color if self.hover and self.text_hover_color else self.text_color)
-        text_rect = text_surface.get_rect(center=(self.width // 2, self.height // 2))
-        self.surface.blit(text_surface, text_rect)
-        surface.blit(self.surface, self.rect)
-        
-        vertices = np.array([[pos[0] - size[0]*0.5, pos[1] + size[1]*0.5],
-                             [pos[0] - size[0]*0.5, pos[1] - size[1]*0.5],
-                             [pos[0] + size[0]*0.5, pos[1] - size[1]*0.5],
-                             
-                             [pos[0] - size[0]*0.5, pos[1] + size[1]*0.5],
-                             [pos[0] + size[0]*0.5, pos[1] - size[1]*0.5],
-                             [pos[0] + size[0]*0.5, pos[1] + size[1]*0.5]], dtype=np.float32)
-        
-        texCoords = np.array([[0,1], [0,0], [1,0], [0,1], [1,0], [1,1]], dtype=np.float32)
-        
-        self.shader = shader2D(vertices, texCoords, img)
 
 class button:
     
