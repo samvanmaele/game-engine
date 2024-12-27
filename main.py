@@ -13,22 +13,32 @@
 
 import numpy as np
 import asyncio
-import pygame as pygame
+import pygame
 import struct
 import zengl
-from PIL import Image
+from PIL import Image, ImageDraw, ImageFont
 import sys
 
 HEIGHT, WIDTH = 1080, 1920
 
 pygame.init()
-pygame.display.set_mode((WIDTH, HEIGHT), flags=pygame.OPENGL|pygame.DOUBLEBUF)
+
+pygame.mixer.init()
+pygame.mixer.music.set_volume(1)
+audio1 = pygame.mixer.music.load("sfx/NeuroSama-Goddess.ogg")
+pygame.mixer.music.play(-1)
+
+screen = pygame.display.set_mode((WIDTH, HEIGHT), flags=pygame.OPENGL|pygame.DOUBLEBUF)
 clock = pygame.time.Clock()
 ctx = zengl.context()
 size = pygame.display.get_window_size()
 image = ctx.image(size, 'rgba8unorm', samples= 4)
 depth = ctx.image(size, 'depth24plus', samples= 4)
 output = ctx.image(size, 'rgba8unorm')
+
+textfont = pygame.font.SysFont('consolas', 50)
+text_font = textfont.render("EEEEEEEEE", True, (255,255,255))
+text_surface = text_font.get_rect(center = (960, 540))
 
 #####################################################################################
 
@@ -200,7 +210,7 @@ def ray_intersect_aabb(ray, aabb):
 
 projection = create_perspective_projection_from_bounds(-0.1, 0.1, -0.1*HEIGHT/WIDTH, 0.1*HEIGHT/WIDTH, 0.1, 2000)
 
-def shader2D(vertexBuffer, texBuffer, textures):
+def shader2D(vertexBuffer, texBuffer, texture):
     
     return ctx.pipeline(
         vertex_shader="""
@@ -236,9 +246,8 @@ def shader2D(vertexBuffer, texBuffer, textures):
         """,
         
         blend={'enable': True, 'src_color': 'src_alpha', 'dst_color': 'one_minus_src_alpha'},
-        layout=[{'name': 'material[0]', 'binding': 0}, {'name': 'material[1]', 'binding': 1}],
-        resources=[{'type': 'sampler', 'binding': 0, 'image': textures[0], 'wrap_x': 'clamp_to_edge', 'wrap_y': 'clamp_to_edge', 'min_filter': 'nearest', 'mag_filter': 'nearest'},
-                   {'type': 'sampler', 'binding': 1, 'image': textures[1], 'wrap_x': 'clamp_to_edge', 'wrap_y': 'clamp_to_edge', 'min_filter': 'nearest', 'mag_filter': 'nearest'}],
+        layout=[{'name': 'material', 'binding': 0}],
+        resources=[{'type': 'sampler', 'binding': 0, 'image': texture, 'wrap_x': 'clamp_to_edge', 'wrap_y': 'clamp_to_edge', 'min_filter': 'nearest', 'mag_filter': 'nearest'}],
         
         vertex_buffers= [*zengl.bind(ctx.buffer(vertexBuffer), "2f", 0),
                          *zengl.bind(ctx.buffer(texBuffer), "2f", 1)],
@@ -259,13 +268,13 @@ def shader2Danitex(vertexBuffer, texBuffer, texture, frameAmount):
             
             layout(location = 0) in vec2 vpos;
             layout(location = 1) in vec2 vtex;
-            uniform float frame;
+            uniform float ofset;
             
             out vec2 TexCoords;
             
             void main()
             {
-                TexCoords = (vtex + vec2(frame, 0));
+                TexCoords = vtex + vec2(ofset, 0);
                 gl_Position = vec4(vpos, 0, 1);
             }
         """,
@@ -285,7 +294,7 @@ def shader2Danitex(vertexBuffer, texBuffer, texture, frameAmount):
             }
         """,
         
-        uniforms={'frame': 0},
+        uniforms={'ofset': 0},
         
         blend={'enable': True, 'src_color': 'src_alpha', 'dst_color': 'one_minus_src_alpha'},
         layout=[{'name': 'material', 'binding': 0}],
@@ -657,7 +666,7 @@ class scene:
         
         self.player = player(playerPos, playerEul, camEul, camZoom)
         self.jumpTime = 0
-        self.height = 0
+        self.height = 700
         self.heightmap = material("gfx/map8.png")
         
         if sceneNr == 0:
@@ -735,13 +744,15 @@ class scene:
                 meshmin, meshmax = [list(map(int, vec3[::2])) for vec3 in meshBoundingBox/4 + 250]
                 [self.entityGrid[x][y].append(obj) for x in range(meshmin[0], meshmax[0]+1) for y in range(meshmin[1], meshmax[1]+1) if obj not in self.entityGrid[x][y]]
     
+        #self.text = text("eeeee", (100, 100))
+        
     def jump(self, jump):
         
         if not self.jumpTime:
             self.jumpTime = jump
             self.jumpStartHeight = self.height
         
-        t = jump - self.jumpTime
+        t = (jump - self.jumpTime)
         jumpheight = 5*t - 4.9*(t**2)
         
         if jumpheight < (self.height - self.jumpStartHeight):
@@ -885,11 +896,13 @@ class scene:
         output.blit()
         ctx.end_frame()
         
+        screen.blit(text_font, text_surface)
+        
         pygame.display.flip()
 
 class game:
     
-    __slots__ = ("window", "renderer", "scene", "sceneNr", "last_time", "window_time", "frametime", "keys", "scroll", "jump")
+    __slots__ = ("window", "renderer", "scene", "sceneNr", "time", "last_time", "window_time", "frametime", "keys", "scroll", "jump")
 
     def __init__(self):
         
@@ -961,7 +974,7 @@ class game:
         
         #the jump code is an ungodly mess, dont touch it if not needed
         if self.jump:
-            self.jump = self.scene.jump(self.last_time)
+            self.jump = self.scene.jump(self.time)
 
         if np.any(dPos):
             self.scene.movePlayer(dPos, sprint, self.frametime)
@@ -975,7 +988,8 @@ class game:
     
     def set_up_timer(self):
 
-        self.last_time = pygame.time.get_ticks()/1000
+        self.last_time = 0
+        self.time = 0
         self.frametime = 0
     
     def calculate_framerate(self):
@@ -985,10 +999,10 @@ class game:
         if framerate != 0:
             self.frametime = 1000/framerate
         
-        time = pygame.time.get_ticks()/1000
-        if time - self.last_time > 1:
+        self.time = pygame.time.get_ticks()/1000
+        if self.time - self.last_time > 1:
             pygame.display.set_caption(f"Running at {int(framerate)} fps.")
-            self.last_time = time
+            self.last_time = self.time
     
     def quit(self):
         
@@ -1091,6 +1105,32 @@ def newGameClick():
 def quitClick():
     return EXIT
 
+class text:
+    
+    def __init__(self, text, pos):
+        
+        text = textfont.render(text, True, (255, 255, 255))
+        Pixels = pygame.image.tobytes(text, 'RGBA', True)
+        size = text.get_size()
+        img = ctx.image(size, "rgba8unorm", Pixels)
+        
+        text_surface = self.font.render(self.text, True, self.text_hover_color if self.hover and self.text_hover_color else self.text_color)
+        text_rect = text_surface.get_rect(center=(self.width // 2, self.height // 2))
+        self.surface.blit(text_surface, text_rect)
+        surface.blit(self.surface, self.rect)
+        
+        vertices = np.array([[pos[0] - size[0]*0.5, pos[1] + size[1]*0.5],
+                             [pos[0] - size[0]*0.5, pos[1] - size[1]*0.5],
+                             [pos[0] + size[0]*0.5, pos[1] - size[1]*0.5],
+                             
+                             [pos[0] - size[0]*0.5, pos[1] + size[1]*0.5],
+                             [pos[0] + size[0]*0.5, pos[1] - size[1]*0.5],
+                             [pos[0] + size[0]*0.5, pos[1] + size[1]*0.5]], dtype=np.float32)
+        
+        texCoords = np.array([[0,1], [0,0], [1,0], [0,1], [1,0], [1,1]], dtype=np.float32)
+        
+        self.shader = shader2D(vertices, texCoords, img)
+
 class button:
     
     def __init__(self, pos, size, texture, function):
@@ -1119,11 +1159,11 @@ class button:
     def handleMouse(self, pos, click):
         
         if self.inside(pos):
-            self.shader.uniforms['frame'][:] = struct.pack("1f", 1 / self.frameCount)
+            self.shader.uniforms['ofset'][:] = struct.pack("1f", 1 / self.frameCount)
             if click:
                 return self.click()
         else:
-            self.shader.uniforms['frame'][:] = struct.pack("1f", 0 / self.frameCount)
+            self.shader.uniforms['ofset'][:] = struct.pack("1f", 0 / self.frameCount)
         
         return CONTINUE
     
