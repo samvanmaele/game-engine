@@ -164,20 +164,20 @@ def loadGLTF(filename):
     
     listLenght = len(vertexDataList)
     
-    np.savetxt(filename + "Data", [hasNormals, hasTextures, hasJoints, listLenght], fmt='%f')
-    np.savetxt(filename + "BoundingBox", boundingBox, fmt='%f')
+    np.savetxt(filename + ".Data", [hasNormals, hasTextures, hasJoints, listLenght], fmt='%f')
+    np.savetxt(filename + ".BoundingBox", boundingBox, fmt='%f')
     for i in range(listLenght):
         
-        np.savetxt(f"{filename}VertexDataList{i}", vertexDataList[i], fmt='%f')
+        np.savetxt(f"{filename}.VertexDataList{i}", vertexDataList[i], fmt='%f')
         if hasNormals:
-            np.savetxt(f"{filename}NormalDataList{i}", normalDataList[i], fmt='%f')
+            np.savetxt(f"{filename}.NormalDataList{i}", normalDataList[i], fmt='%f')
         if hasTextures:
-            np.savetxt(f"{filename}TexCoordDataList{i}", texCoordDataList[i], fmt='%f')
+            np.savetxt(f"{filename}.TexCoordDataList{i}", texCoordDataList[i], fmt='%f')
         if hasJoints:
-            np.savetxt(f"{filename}JointDataList{i}", jointDataList[i], fmt='%i')
-            np.savetxt(f"{filename}WeightDataList{i}", weightDataList[i], fmt='%f')
-        np.savetxt(f"{filename}IndexDataList{i}", indexDataList[i], fmt='%i')
+            np.savetxt(f"{filename}.JointDataList{i}", jointDataList[i], fmt='%i')
+            np.savetxt(f"{filename}.WeightDataList{i}", weightDataList[i], fmt='%f')
+        np.savetxt(f"{filename}.IndexDataList{i}", indexDataList[i], fmt='%i')
     
     if hasJoints:
-        np.savetxt(f"{filename}MatData", [nrAnimations, timeData], fmt='%i')
-        [np.savetxt(f"{filename}Anim{i}Matrices", finalMatrices[i].flatten(), fmt='%f') for i in range(nrAnimations)]
+        np.savetxt(f"{filename}.MatData", [nrAnimations, timeData], fmt='%i')
+        [np.savetxt(f"{filename}.Anim{i}Matrices", finalMatrices[i].flatten(), fmt='%f') for i in range(nrAnimations)]
