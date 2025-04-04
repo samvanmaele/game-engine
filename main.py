@@ -18,6 +18,7 @@ import struct
 import zengl
 from PIL import Image, ImageDraw, ImageFont
 import sys
+import cProfile
 
 HEIGHT, WIDTH = 1080, 1920
 
@@ -231,7 +232,7 @@ def get_view(forwards, up, right, position):
                      (-np.dot(right, position), -np.dot(up, position), np.dot(forwards, position), 1.0)), dtype=np.float32)
 
 projection = create_perspective_projection_from_bounds(-0.1, 0.1, -0.1*HEIGHT/WIDTH, 0.1*HEIGHT/WIDTH, 0.1, 2000)
-lightSize = 10
+lightSize = 25
 lightProjection = create_orthogonal_projection(-lightSize, lightSize, -lightSize, lightSize, 50, 150)
 
 bias = [0.002, 0.0005]
@@ -392,21 +393,21 @@ def shader3D(vertexBuffer, normBuffer, texBuffer, texture):
                 vec3 projCoords = lightSpace.xyz / lightSpace.w;
                 projCoords = projCoords * 0.5 + 0.5;
 
-                float shadow = 0.0;
+                int shadow = 0;
                 vec2 texelSize = 1.0 / vec2(textureSize(lightdepth, 0));
                 for(int x = -1; x <= 1; ++x)
                 {
                     for(int y = -1; y <= 1; ++y)
                     {
                         vec2 local = projCoords.xy + vec2(x, y) * texelSize;
-                        shadow += any(lessThan(vec2(0.5), abs(local - 0.5))) ? 1.0 : 0.0;
+                        shadow += any(lessThan(vec2(0.5), abs(local - 0.5))) ? 1 : 0;
 
                         float pcfDepth = texture(lightdepth, local).r; 
-                        shadow += pcfDepth > (projCoords.z - bias) ? 1.0 : 0.0;
+                        shadow += pcfDepth > (projCoords.z - bias) ? 1 : 0;
                     }    
                 }
 
-                return min(shadow / 9.0, 1.0);
+                return min(float(shadow)/9.0, 1.0);
             }
 
             vec3 calcPointlight(int i)
@@ -421,10 +422,14 @@ def shader3D(vertexBuffer, normBuffer, texBuffer, texture):
                 vec3 relCamPos = normalize(camPos - fragPos);
                 vec3 halfVec = normalize(relLightPos + relCamPos);
 
-                result += lightcolor[i] * lightstrength[i] * max(0.0, dot(fragNorm, relLightPos)) / (distance * distance) * baseTexture; //diffuse
-                result += lightcolor[i] * lightstrength[i] * pow(max(0.0, dot(fragNorm, halfVec)), 32.0) / (distance * distance); //specular
+                float lightval = lightcolor[i] * lightstrength[i];
+                float distsquared = distance * distance;
+                float dotfrag = dot(fragNorm, relLightPos);
 
-                float bias = max(biasV.x * (1.0 - dot(fragNorm, relLightPos)), biasV.y);
+                result += lightval * max(0.0, dotfrag) / distsquared * baseTexture; //diffuse
+                result += lightval * pow(max(0.0, dot(fragNorm, halfVec)), 32.0) / distsquared; //specular
+
+                float bias = max(biasV.x * (1.0 - dotfrag), biasV.y);
                 float shadow = ShadowCalculation(lightSpace, bias);
                 return result * shadow;
             }
@@ -538,21 +543,21 @@ def shader3Danimated(vertexBuffer, normBuffer, texBuffer, jointDataList, weightD
                 vec3 projCoords = lightSpace.xyz / lightSpace.w;
                 projCoords = projCoords * 0.5 + 0.5;
 
-                float shadow = 0.0;
+                int shadow = 0;
                 vec2 texelSize = 1.0 / vec2(textureSize(lightdepth, 0));
                 for(int x = -1; x <= 1; ++x)
                 {
                     for(int y = -1; y <= 1; ++y)
                     {
                         vec2 local = projCoords.xy + vec2(x, y) * texelSize;
-                        shadow += any(lessThan(vec2(0.5), abs(local - 0.5))) ? 1.0 : 0.0;
+                        shadow += any(lessThan(vec2(0.5), abs(local - 0.5))) ? 1 : 0;
 
                         float pcfDepth = texture(lightdepth, local).r; 
-                        shadow += pcfDepth > (projCoords.z - bias) ? 1.0 : 0.0;
+                        shadow += pcfDepth > (projCoords.z - bias) ? 1 : 0;
                     }    
                 }
 
-                return min(shadow / 9.0, 1.0);
+                return min(float(shadow)/9.0, 1.0);
             }
 
             vec3 calcPointlight(int i)
@@ -567,10 +572,14 @@ def shader3Danimated(vertexBuffer, normBuffer, texBuffer, jointDataList, weightD
                 vec3 relCamPos = normalize(camPos - fragPos);
                 vec3 halfVec = normalize(relLightPos + relCamPos);
 
-                result += lightcolor[i] * lightstrength[i] * max(0.0, dot(fragNorm, relLightPos)) / (distance * distance) * baseTexture; //diffuse
-                result += lightcolor[i] * lightstrength[i] * pow(max(0.0, dot(fragNorm, halfVec)), 32.0) / (distance * distance); //specular
+                float lightval = lightcolor[i] * lightstrength[i];
+                float distsquared = distance * distance;
+                float dotfrag = dot(fragNorm, relLightPos);
 
-                float bias = max(biasV.x * (1.0 - dot(fragNorm, relLightPos)), biasV.y);
+                result += lightval * max(0.0, dotfrag) / distsquared * baseTexture; //diffuse
+                result += lightval * pow(max(0.0, dot(fragNorm, halfVec)), 32.0) / distsquared; //specular
+
+                float bias = max(biasV.x * (1.0 - dotfrag), biasV.y);
                 float shadow = ShadowCalculation(lightSpace, bias);
                 return result * shadow;
             }
@@ -1415,3 +1424,5 @@ async def main():
     myApp.quit()
 
 asyncio.run(main())
+
+#cProfile.run()
