@@ -18,7 +18,7 @@ import struct
 import zengl
 from PIL import Image, ImageDraw, ImageFont
 import sys
-import cProfile
+#import cProfile
 
 HEIGHT, WIDTH = 1080, 1920
 
@@ -422,7 +422,7 @@ def shader3D(vertexBuffer, normBuffer, texBuffer, texture):
                 vec3 relCamPos = normalize(camPos - fragPos);
                 vec3 halfVec = normalize(relLightPos + relCamPos);
 
-                float lightval = lightcolor[i] * lightstrength[i];
+                vec3 lightval = lightcolor[i] * lightstrength[i];
                 float distsquared = distance * distance;
                 float dotfrag = dot(fragNorm, relLightPos);
 
@@ -572,7 +572,7 @@ def shader3Danimated(vertexBuffer, normBuffer, texBuffer, jointDataList, weightD
                 vec3 relCamPos = normalize(camPos - fragPos);
                 vec3 halfVec = normalize(relLightPos + relCamPos);
 
-                float lightval = lightcolor[i] * lightstrength[i];
+                vec3 lightval = lightcolor[i] * lightstrength[i];
                 float distsquared = distance * distance;
                 float dotfrag = dot(fragNorm, relLightPos);
 
