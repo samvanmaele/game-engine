@@ -32,9 +32,9 @@ screen = pygame.display.set_mode((WIDTH, HEIGHT), flags=pygame.OPENGL|pygame.DOU
 clock = pygame.time.Clock()
 ctx = zengl.context()
 size = pygame.display.get_window_size()
-image = ctx.image(size, 'rgba8unorm')
-depth = ctx.image(size, 'depth24plus')
-lightdepth = ctx.image(size, 'depth24plus')
+image = ctx.image(size, 'rgba8unorm', samples= 4)
+depth = ctx.image(size, 'depth24plus', samples= 4)
+lightdepth = ctx.image((1440 * 3, 2560 * 3), 'depth24plus')
 output = ctx.image(size, 'rgba8unorm')
 
 #####################################################################################
@@ -223,11 +223,18 @@ def ray_intersect_aabb(ray, aabb):
     t = min(x for x in [tmin, tmax] if x >= 0)
     point = ray[0] + (ray[1] * t)
     return point
+def get_view(forwards, up, right, position):
+
+    return np.array(((right[0], up[0], -forwards[0], 0),
+                     (right[1], up[1], -forwards[1], 0),
+                     (right[2], up[2], -forwards[2], 0),
+                     (-np.dot(right, position), -np.dot(up, position), np.dot(forwards, position), 1.0)), dtype=np.float32)
 
 projection = create_perspective_projection_from_bounds(-0.1, 0.1, -0.1*HEIGHT/WIDTH, 0.1*HEIGHT/WIDTH, 0.1, 2000)
-lightProjection = create_orthogonal_projection(-50, 50, -50, 50, 0.1, 100)
+lightSize = 10
+lightProjection = create_orthogonal_projection(-lightSize, lightSize, -lightSize, lightSize, 50, 150)
 
-bias = [0.01, 0.001]
+bias = [0.002, 0.0005]
 ctx.includes['biasV'] = f'const vec2 biasV = vec2({bias[0]}, {bias[1]});'
 
 def shader2D(vertexBuffer, texBuffer, texture):
@@ -372,7 +379,7 @@ def shader3D(vertexBuffer, normBuffer, texBuffer, texture):
             in vec4 lightSpace;
 
             uniform sampler2D material;
-            uniform sampler2DShadow lightdepth;
+            uniform sampler2D lightdepth;
             uniform vec3 camPos;
             uniform vec3 lightposition[1];
             uniform vec3 lightcolor[1];
@@ -384,9 +391,22 @@ def shader3D(vertexBuffer, normBuffer, texBuffer, texture):
             {
                 vec3 projCoords = lightSpace.xyz / lightSpace.w;
                 projCoords = projCoords * 0.5 + 0.5;
-                float shadow = texture(lightdepth, vec3(projCoords.xy, projCoords.z - bias));
 
-                return shadow;
+                float shadow = 0.0;
+                vec2 texelSize = 1.0 / vec2(textureSize(lightdepth, 0));
+                for(int x = -1; x <= 1; ++x)
+                {
+                    for(int y = -1; y <= 1; ++y)
+                    {
+                        vec2 local = projCoords.xy + vec2(x, y) * texelSize;
+                        shadow += any(lessThan(vec2(0.5), abs(local - 0.5))) ? 1.0 : 0.0;
+
+                        float pcfDepth = texture(lightdepth, local).r; 
+                        shadow += pcfDepth > (projCoords.z - bias) ? 1.0 : 0.0;
+                    }    
+                }
+
+                return min(shadow / 9.0, 1.0);
             }
 
             vec3 calcPointlight(int i)
@@ -428,7 +448,7 @@ def shader3D(vertexBuffer, normBuffer, texBuffer, texture):
         blend={'enable': True, 'src_color': 'src_alpha', 'dst_color': 'one_minus_src_alpha'},
         layout=[{'name': 'material', 'binding': 0}, {'name': 'lightdepth', 'binding': 1}],
         resources=[{'type': 'sampler', 'binding': 0, 'image': texture, 'wrap_x': 'clamp_to_edge', 'wrap_y': 'clamp_to_edge', 'min_filter': 'nearest', 'mag_filter': 'nearest'},
-                   {'type': 'sampler', 'binding': 1, 'image': lightdepth, 'compare_func': 'less', 'compare_mode': 'ref_to_texture'}],
+                   {'type': 'sampler', 'binding': 1, 'image': lightdepth, 'wrap_x': 'clamp_to_edge', 'wrap_y': 'clamp_to_edge', 'min_filter': 'nearest', 'mag_filter': 'nearest'}],
         
         vertex_buffers= [*zengl.bind(ctx.buffer(vertexBuffer), "3f", 0),
                          *zengl.bind(ctx.buffer(normBuffer), "3f", 1),
@@ -505,7 +525,7 @@ def shader3Danimated(vertexBuffer, normBuffer, texBuffer, jointDataList, weightD
             in vec4 lightSpace;
 
             uniform sampler2D material;
-            uniform sampler2DShadow lightdepth;
+            uniform sampler2D lightdepth;
             uniform vec3 camPos;
             uniform vec3 lightposition[1];
             uniform vec3 lightcolor[1];
@@ -517,9 +537,22 @@ def shader3Danimated(vertexBuffer, normBuffer, texBuffer, jointDataList, weightD
             {
                 vec3 projCoords = lightSpace.xyz / lightSpace.w;
                 projCoords = projCoords * 0.5 + 0.5;
-                float shadow = texture(lightdepth, vec3(projCoords.xy, projCoords.z - bias));
 
-                return shadow;
+                float shadow = 0.0;
+                vec2 texelSize = 1.0 / vec2(textureSize(lightdepth, 0));
+                for(int x = -1; x <= 1; ++x)
+                {
+                    for(int y = -1; y <= 1; ++y)
+                    {
+                        vec2 local = projCoords.xy + vec2(x, y) * texelSize;
+                        shadow += any(lessThan(vec2(0.5), abs(local - 0.5))) ? 1.0 : 0.0;
+
+                        float pcfDepth = texture(lightdepth, local).r; 
+                        shadow += pcfDepth > (projCoords.z - bias) ? 1.0 : 0.0;
+                    }    
+                }
+
+                return min(shadow / 9.0, 1.0);
             }
 
             vec3 calcPointlight(int i)
@@ -562,7 +595,7 @@ def shader3Danimated(vertexBuffer, normBuffer, texBuffer, jointDataList, weightD
         blend={'enable': True, 'src_color': 'src_alpha', 'dst_color': 'one_minus_src_alpha'},
         layout=[{'name': 'material', 'binding': 0}, {'name': 'lightdepth', 'binding': 1}],
         resources=[{'type': 'sampler', 'binding': 0, 'image': texture, 'wrap_x': 'clamp_to_edge', 'wrap_y': 'clamp_to_edge', 'min_filter': 'nearest', 'mag_filter': 'nearest'},
-                   {'type': 'sampler', 'binding': 1, 'image': lightdepth, 'compare_func': 'less', 'compare_mode': 'ref_to_texture'}],
+                   {'type': 'sampler', 'binding': 1, 'image': lightdepth, 'wrap_x': 'clamp_to_edge', 'wrap_y': 'clamp_to_edge', 'min_filter': 'nearest', 'mag_filter': 'nearest'}],
         
         vertex_buffers= [*zengl.bind(ctx.buffer(vertexBuffer), "3f", 0),
                          *zengl.bind(ctx.buffer(normBuffer), "3f", 1),
@@ -627,7 +660,7 @@ def shaderDepth(vertexBuffer):
 
             void main()
             {
-                gl_Position = lightSpaceMatrix * model * vec4(vpos, 1);
+                gl_Position = lightSpaceMatrix * model * vec4(vpos.x, vpos.yz, 1);
             }
         """,
         fragment_shader="""
@@ -649,7 +682,7 @@ def shaderDepth(vertexBuffer):
         
         vertex_count= len(vertexBuffer),
         topology= "triangles",
-        framebuffer= [image, lightdepth]
+        framebuffer= [lightdepth]
     )
 
 #####################################################################################
@@ -661,6 +694,10 @@ class entity:
         self.position = np.array(position, dtype=np.float32)
         self.eulers = np.array(eulers, dtype=np.float32)
         self.size = size
+
+        self.transformMat = np.identity(4)
+        self.transformMat[0:3,0:3] = create_from_eulers(self.eulers)
+        self.transformMat[3,0:3] = position
 
 class pointLight(entity):
 
@@ -683,6 +720,11 @@ class player(entity):
 
         self.forwards = np.array((cosX, 0, -sinX))
         self.right = np.array((-sinX, 0, -cosX))
+
+        transformMat = np.identity(4)
+        transformMat[0:3,0:3] = create_from_eulers(self.eulers)
+        transformMat[3,0:3] = self.position
+        self.transformMat = transformMat
     
     def angle(self, frameTime, dPos):
         
@@ -732,17 +774,11 @@ class camera(entity):
 
     def getViewTransform(self):
         
-        return np.array(((self.right[0], self.up[0], -self.forwards[0], 0),
-                         (self.right[1], self.up[1], -self.forwards[1], 0),
-                         (self.right[2], self.up[2], -self.forwards[2], 0),
-                         (-np.dot(self.right, self.position), -np.dot(self.up, self.position), np.dot(self.forwards,self.position), 1.0)), dtype=np.float32)
+        return get_view(self.forwards, self.up, self.right, self.position)
     
     def getYawMat(self):
         
-        return np.array(((self.right[0], 0, -self.playerForwards[0], 0),
-                         (self.right[1], 1, -self.playerForwards[1], 0),
-                         (self.right[2], 0, -self.playerForwards[2], 0),
-                         (-np.dot(self.right, self.position), -np.dot((0,1,0), self.position), np.dot(self.playerForwards,self.position), 1.0)), dtype=np.float32)
+        return get_view(self.forwards, (0, 1, 0), self.right, self.position)
     
     def spin(self, dEulers):
 
@@ -767,7 +803,7 @@ class scene:
         
         if sceneNr == 0:
             
-            light = pointLight([-50, 700, 0], [0, -1/4*np.pi, 0], [218, 203, 125], 10)
+            self.light = pointLight([-100, 820, -100], [-1/4*np.pi, -1/4*np.pi, 0], [218, 203, 125], 200)
             
             self.entities = {
                 ENTITY_TYPE["player"]:            [self.player,                    gltfMesh("models/vedal987/vedal987.gltf",                    [material("models/vedal987/vedal987.png")])],
@@ -828,20 +864,16 @@ class scene:
                 ENTITY_TYPE["bounding_box"]:      [entity([0,0,0],999),            boundingBoxMesh(                                              )]
                 }
         
-        cosX = np.cos(light.eulers[0])
-        sinX = np.sin(light.eulers[0])
-        cosY = np.cos(light.eulers[1])
-        sinY = np.sin(light.eulers[1])
+        cosX = np.cos(self.light.eulers[0])
+        sinX = np.sin(self.light.eulers[0])
+        cosY = np.cos(self.light.eulers[1])
+        sinY = np.sin(self.light.eulers[1])
 
-        forwards = np.array((cosX*cosY, sinY, -sinX*cosY))
-        right = (sinX, 0, cosX)
-        up = np.array((-cosX*sinY, cosY, sinX*sinY))
+        self.forwards = np.array((cosX*cosY, sinY, -sinX*cosY))
+        self.right = (sinX, 0, cosX)
+        self.up = np.array((-cosX*sinY, cosY, sinX*sinY))
 
-        lightView = np.array(((right[0], up[0], -forwards[0], 0),
-                              (right[1], up[1], -forwards[1], 0),
-                              (right[2], up[2], -forwards[2], 0),
-                              (-np.dot(right, light.position), -np.dot(up, light.position), np.dot(forwards, light.position), 1.0)),
-                              dtype=np.float32)
+        lightView = get_view(self.forwards, self.up, self.right, self.light.position)
 
         lightSpaceMatrix = lightView @ lightProjection
 
@@ -853,9 +885,9 @@ class scene:
 
             for shader in obj[1].shaders:
                 
-                shader.uniforms['lightposition'][:] = struct.pack('3f', *light.position)
-                shader.uniforms['lightcolor'][:] = struct.pack('3f', *light.color)
-                shader.uniforms['lightstrength'][:] = struct.pack('1f', light.strength)
+                shader.uniforms['lightposition'][:] = struct.pack('3f', *self.light.position)
+                shader.uniforms['lightcolor'][:] = struct.pack('3f', *self.light.color)
+                shader.uniforms['lightstrength'][:] = struct.pack('1f', self.light.strength)
                 shader.uniforms['lightSpaceMatrix'][:] = struct.pack('4f4f4f4f', *lightSpaceMatrix.flatten())
             
             for depth in obj[1].depth:
@@ -894,7 +926,7 @@ class scene:
         
         self.player.angle(frametime, dPos)
         self.player.move(movement * 0.01 * frametime)
-        
+
         pos = self.player.position[0:3:2] * 5/2 + 2500
         pos = [int(i) for i in pos]
         
@@ -1001,21 +1033,26 @@ class scene:
         cam = self.player.camera
         view = cam.getViewTransform()
         frustum = cam.frustum
+
+        self.light.position = self.player.position - 100 * self.forwards
+        lightSpaceMatrix = get_view(self.forwards, self.up, self.right, self.light.position) @ lightProjection
         
+        for entity_type, entity in self.entities.items():
+            
+            if entity_type is ENTITY_TYPE['bounding_box']: continue
+            
+            entity[1].drawDepth(entity[0].transformMat, lightSpaceMatrix)
+
         for entity in self.entities.values():
             obj, mesh = entity
             
             if all([vec4[0:3] @ obj.position - vec4[3] > -entity[0].size for vec4 in frustum]):
                 
-                transformMat = np.identity(4)
-                transformMat[0:3,0:3] = create_from_eulers(entity[0].eulers)
-                transformMat[3,0:3] = obj.position
-                
                 if mesh.hasJoints:
                     mesh.pose += 1
                     mesh.setUniform()
                 
-                mesh.draw(view, transformMat, cam.position)
+                mesh.draw(view, obj.transformMat, lightSpaceMatrix, cam.position)
         
         image.blit(output)
         output.blit()
@@ -1327,17 +1364,21 @@ class gltfMesh:
             animation = np.array(self.transformMat[0][round(self.pose//8)%self.timeData])
             shader.uniforms['animation'][:] = struct.pack(f'{self.nrJoints*16}f', *animation.flatten())
     
-    def draw(self, view, model, camPos):
-        
-        for depth in self.depth:
-            depth.uniforms['model'][:] = struct.pack('4f4f4f4f', *model.flatten())
-            depth.render()
+    def draw(self, view, model, lightSpaceMatrix, camPos):
 
         for shader in self.shaders:
+            shader.uniforms['lightSpaceMatrix'][:] = struct.pack('4f4f4f4f', *lightSpaceMatrix.flatten())
             shader.uniforms['view'][:] = struct.pack('4f4f4f4f', *view.flatten())
             shader.uniforms['model'][:] = struct.pack('4f4f4f4f', *model.flatten())
             shader.uniforms['camPos'][:] = struct.pack('3f', *camPos)
             shader.render()
+    
+    def drawDepth(self, model, lightSpaceMatrix):
+
+        for depth in self.depth:
+            depth.uniforms['lightSpaceMatrix'][:] = struct.pack('4f4f4f4f', *lightSpaceMatrix.flatten())
+            depth.uniforms['model'][:] = struct.pack('4f4f4f4f', *model.flatten())
+            depth.render()
 
 class boundingBoxMesh:
     
@@ -1350,7 +1391,7 @@ class boundingBoxMesh:
         
         self.shader.uniforms['boundingBox'][:] = struct.pack('3f3f', *boundingBox.flatten())
         
-    def draw(self, view, model, camPos):
+    def draw(self, view, model, lightSpaceMatrix, camPos):
         
         self.shader.uniforms['view'][:] = struct.pack('4f4f4f4f', *view.flatten())
         self.shader.render()
