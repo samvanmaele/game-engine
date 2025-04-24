@@ -18,7 +18,7 @@ import struct
 import zengl
 from PIL import Image, ImageDraw, ImageFont
 import sys
-#import cProfile
+import cProfile
 
 HEIGHT, WIDTH = 1080, 1920
 
@@ -798,8 +798,8 @@ class camera(entity):
 
     def makeFrustum(self):
 
-        self.frustumParts = [normalize(self.forwards + self.right), normalize(self.forwards - self.right), normalize(self.forwards + self.up * 16/9), normalize(self.forwards - self.up * 16/9)]
-        self.frustum = [np.append(normal, np.sum(normal * self.position)) for normal in self.frustumParts]
+        self.frustumParts = [(self.forwards + self.right)/1.4142135787852315, (self.forwards - self.right)/1.4142135787852315, (self.forwards + self.up * 16/9)/2.0397289, (self.forwards - self.up * 16/9)/2.0397289]
+        self.frustum = [[*normal, np.sum(normal * self.position)] for normal in self.frustumParts]
 
 class scene:
     
@@ -894,14 +894,14 @@ class scene:
 
             for shader in obj[1].shaders:
                 
-                shader.uniforms['lightposition'][:] = struct.pack('3f', *self.light.position)
-                shader.uniforms['lightcolor'][:] = struct.pack('3f', *self.light.color)
-                shader.uniforms['lightstrength'][:] = struct.pack('1f', self.light.strength)
-                shader.uniforms['lightSpaceMatrix'][:] = struct.pack('4f4f4f4f', *lightSpaceMatrix.flatten())
+                shader.uniforms['lightposition'][:] = np.ascontiguousarray(self.light.position, 'f').data.cast('B')
+                shader.uniforms['lightcolor'][:] = np.ascontiguousarray(self.light.color, 'f').data.cast('B')
+                shader.uniforms['lightstrength'][:] = np.ascontiguousarray(self.light.strength, 'f').data.cast('B')
+                shader.uniforms['lightSpaceMatrix'][:] = np.ascontiguousarray(lightSpaceMatrix, 'f').data.cast('B')
             
             for depth in obj[1].depth:
                 
-                depth.uniforms['lightSpaceMatrix'][:] = struct.pack('4f4f4f4f', *lightSpaceMatrix.flatten())
+                depth.uniforms['lightSpaceMatrix'][:] = np.ascontiguousarray(lightSpaceMatrix, 'f').data.cast('B')
 
             if entity_type is ENTITY_TYPE["player"]: continue
             
@@ -993,7 +993,7 @@ class scene:
             movement = collisionPosList[index]
             movement += self.checkCollision2(movementList[index], meshBoundingBoxList-pos+movement)
             self.entities[ENTITY_TYPE["bounding_box"]][1].updateBoundingBox(meshBoundingBoxList[index])
-            
+        
         if heightList:
             collisionHeight = pos[1] + max(heightList)
         
@@ -1301,11 +1301,11 @@ class button:
     def handleMouse(self, pos, click):
         
         if self.inside(pos):
-            self.shader.uniforms['ofset'][:] = struct.pack("1f", 1 / self.frameCount)
+            self.shader.uniforms['ofset'][:] = np.ascontiguousarray(1 / self.frameCount, 'f').data.cast('B')
             if click:
                 return self.click()
         else:
-            self.shader.uniforms['ofset'][:] = struct.pack("1f", 0 / self.frameCount)
+            self.shader.uniforms['ofset'][:] = np.ascontiguousarray(0 / self.frameCount, 'f').data.cast('B')
         
         return CONTINUE
     
@@ -1370,23 +1370,23 @@ class gltfMesh:
     def setUniform(self):
         
         for shader in self.shaders:
-            animation = np.array(self.transformMat[0][round(self.pose//8)%self.timeData])
-            shader.uniforms['animation'][:] = struct.pack(f'{self.nrJoints*16}f', *animation.flatten())
+            animation = np.array(self.transformMat[0][self.pose%self.timeData])
+            shader.uniforms['animation'][:] = np.ascontiguousarray(animation, 'f').data.cast('B')
     
     def draw(self, view, model, lightSpaceMatrix, camPos):
 
         for shader in self.shaders:
-            shader.uniforms['lightSpaceMatrix'][:] = struct.pack('4f4f4f4f', *lightSpaceMatrix.flatten())
-            shader.uniforms['view'][:] = struct.pack('4f4f4f4f', *view.flatten())
-            shader.uniforms['model'][:] = struct.pack('4f4f4f4f', *model.flatten())
-            shader.uniforms['camPos'][:] = struct.pack('3f', *camPos)
+            shader.uniforms['lightSpaceMatrix'][:] = np.ascontiguousarray(lightSpaceMatrix, 'f').data.cast('B')
+            shader.uniforms['view'][:] = np.ascontiguousarray(view, 'f').data.cast('B')
+            shader.uniforms['model'][:] = np.ascontiguousarray(model, 'f').data.cast('B')
+            shader.uniforms['camPos'][:] = np.ascontiguousarray(camPos, 'f').data.cast('B')
             shader.render()
     
     def drawDepth(self, model, lightSpaceMatrix):
 
         for depth in self.depth:
-            depth.uniforms['lightSpaceMatrix'][:] = struct.pack('4f4f4f4f', *lightSpaceMatrix.flatten())
-            depth.uniforms['model'][:] = struct.pack('4f4f4f4f', *model.flatten())
+            depth.uniforms['lightSpaceMatrix'][:] = np.ascontiguousarray(lightSpaceMatrix, 'f').data.cast('B')
+            depth.uniforms['model'][:] = np.ascontiguousarray(model, 'f').data.cast('B')
             depth.render()
 
 class boundingBoxMesh:
@@ -1398,11 +1398,11 @@ class boundingBoxMesh:
     
     def updateBoundingBox(self, boundingBox):
         
-        self.shader.uniforms['boundingBox'][:] = struct.pack('3f3f', *boundingBox.flatten())
+        self.shader.uniforms['boundingBox'][:] = np.ascontiguousarray(boundingBox, 'f').data.cast('B')
         
     def draw(self, view, model, lightSpaceMatrix, camPos):
         
-        self.shader.uniforms['view'][:] = struct.pack('4f4f4f4f', *view.flatten())
+        self.shader.uniforms['view'][:] = np.ascontiguousarray(view, 'f').data.cast('B')
         self.shader.render()
 
 #####################################################################################
@@ -1425,4 +1425,4 @@ async def main():
 
 asyncio.run(main())
 
-#cProfile.run()
+#cProfile.run("asyncio.run(main())")
