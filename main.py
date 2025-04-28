@@ -14,10 +14,10 @@
 import numpy as np
 import asyncio
 import pygame
-import struct
 import zengl
-from PIL import Image, ImageDraw, ImageFont
+from PIL import Image
 import sys
+import time
 import cProfile
 
 HEIGHT, WIDTH = 1080, 1920
@@ -35,7 +35,7 @@ ctx = zengl.context()
 size = pygame.display.get_window_size()
 image = ctx.image(size, 'rgba8unorm', samples= 4)
 depth = ctx.image(size, 'depth24plus', samples= 4)
-lightdepth = ctx.image((1440 * 3, 2560 * 3), 'depth24plus')
+lightdepth = ctx.image((1440, 2560), 'depth24plus')
 output = ctx.image(size, 'rgba8unorm')
 
 #####################################################################################
@@ -112,41 +112,18 @@ def create_orthogonal_projection(left, right, bottom, top, near, far, dtype=None
 def normalize(vec):
     
     return (vec.T  / np.sqrt(np.sum(vec**2,axis=-1))).T
-def create_from_eulers(eulers, dtype=None):
-    dtype = dtype or eulers.dtype
+def create_from_eulers(eulers):
 
-    roll, pitch, yaw = eulers
+    sP = np.sin(eulers[1])
+    cP = np.cos(eulers[1])
+    sR = np.sin(eulers[0])
+    cR = np.cos(eulers[0])
+    sY = np.sin(eulers[2])
+    cY = np.cos(eulers[2])
 
-    sP = np.sin(pitch)
-    cP = np.cos(pitch)
-    sR = np.sin(roll)
-    cR = np.cos(roll)
-    sY = np.sin(yaw)
-    cY = np.cos(yaw)
-
-    return np.array(
-        [
-            # m1
-            [
-                cY * cP,
-                -cY * sP * cR + sY * sR,
-                cY * sP * sR + sY * cR,
-            ],
-            # m2
-            [
-                sP,
-                cP * cR,
-                -cP * sR,
-            ],
-            # m3
-            [
-                -sY * cP,
-                sY * sP * cR + cY * sR,
-                -sY * sP * sR + cY * cR,
-            ]
-        ],
-        dtype=dtype
-    )
+    return np.array([[cY * cP, -cY * sP * cR + sY * sR, cY * sP * sR + sY * cR],
+                     [sP, cP * cR, -cP * sR],
+                     [-sY * cP, sY * sP * cR + cY * sR, -sY * sP * sR + cY * cR,]])
 def create_from_quaternion(quat, dtype=None):
     dtype = dtype
 
@@ -232,7 +209,7 @@ def get_view(forwards, up, right, position):
                      (-np.dot(right, position), -np.dot(up, position), np.dot(forwards, position), 1.0)), dtype=np.float32)
 
 projection = create_perspective_projection_from_bounds(-0.1, 0.1, -0.1*HEIGHT/WIDTH, 0.1*HEIGHT/WIDTH, 0.1, 2000)
-lightSize = 25
+lightSize = 10
 lightProjection = create_orthogonal_projection(-lightSize, lightSize, -lightSize, lightSize, 50, 150)
 
 bias = [0.002, 0.0005]
@@ -348,9 +325,7 @@ def shader3D(vertexBuffer, normBuffer, texBuffer, texture):
             layout(location = 2) in vec2 vtex;
             
             uniform mat4 projection;
-            uniform mat4 view;
-            uniform mat4 model;
-            uniform mat4 lightSpaceMatrix;
+            uniform mat4 LSMvm[3];
             
             out vec2 TexCoords;
             out vec3 fragPos;
@@ -359,13 +334,13 @@ def shader3D(vertexBuffer, normBuffer, texBuffer, texture):
             
             void main()
             {
-                vec4 vertPos = model * vec4(vpos, 1.0);
+                vec4 vertPos = LSMvm[2] * vec4(vpos, 1.0);
                 
                 TexCoords = vtex;
                 fragPos = vertPos.xyz;
-                fragNorm = (model * vec4(vnorm, 0)).xyz;
-                lightSpace = lightSpaceMatrix * vertPos;
-                gl_Position = projection * view * vertPos;
+                fragNorm = (LSMvm[2] * vec4(vnorm, 0)).xyz;
+                lightSpace = LSMvm[0] * vertPos;
+                gl_Position = projection * LSMvm[1] * vertPos;
             }
         """,
         fragment_shader="""
@@ -444,7 +419,8 @@ def shader3D(vertexBuffer, normBuffer, texBuffer, texture):
             }
         """,
         
-        uniforms={'projection': projection.flatten(), 'view': np.identity(4).flatten(), 'model': np.identity(4).flatten(), 'lightSpaceMatrix': np.identity(4).flatten(),
+        uniforms={'projection': projection.flatten(),
+                  'LSMvm': [np.identity(4).flatten(), np.identity(4).flatten(), np.identity(4).flatten()],
                   'camPos' : [0,0,0],
                   'lightposition': [[0, 1000, 0]],
                   'lightcolor': [[255,255,255]],
@@ -478,9 +454,7 @@ def shader3Danimated(vertexBuffer, normBuffer, texBuffer, jointDataList, weightD
             layout(location = 4) in vec4 vweights;
             
             uniform mat4 projection;
-            uniform mat4 view;
-            uniform mat4 model;
-            uniform mat4 lightSpaceMatrix;
+            uniform mat4 LSMvm[3];
             uniform mat4 animation[50];
             
             out vec2 TexCoords;
@@ -509,13 +483,13 @@ def shader3Danimated(vertexBuffer, normBuffer, texBuffer, jointDataList, weightD
                 vec4 position = applyBone(vec4(vpos, 1.0));
                 vec4 normal = normalize(applyBone(vec4(vnorm, 0.0)));
                 
-                vec4 vertPos = model * position;
+                vec4 vertPos = LSMvm[2] * position;
                 
                 TexCoords = vtex;
                 fragPos = vertPos.xyz;
-                fragNorm = (model * normal).xyz;
-                lightSpace = lightSpaceMatrix * vertPos;
-                gl_Position = projection * view * vertPos;
+                fragNorm = (LSMvm[2] * normal).xyz;
+                lightSpace = LSMvm[0] * vertPos;
+                gl_Position = projection * LSMvm[1] * vertPos;
             }
         """,
         fragment_shader="""
@@ -594,7 +568,8 @@ def shader3Danimated(vertexBuffer, normBuffer, texBuffer, jointDataList, weightD
             }
         """,
         
-        uniforms={'projection': projection.flatten(), 'view': np.identity(4).flatten(), 'model': np.identity(4).flatten(), 'lightSpaceMatrix': np.identity(4).flatten(),
+        uniforms={'projection': projection.flatten(),
+                  'LSMvm': [np.identity(4).flatten(), np.identity(4).flatten(), np.identity(4).flatten()],
                   'animation': [np.identity(4) for i in range(nrJoints)],
                   'camPos': [0,0,0],
                   'lightposition': [[0, 1000, 0]],
@@ -664,12 +639,11 @@ def shaderDepth(vertexBuffer):
             
             layout(location = 0) in vec3 vpos;
             
-            uniform mat4 lightSpaceMatrix;
-            uniform mat4 model;
+            uniform mat4 LSMm[2];
 
             void main()
             {
-                gl_Position = lightSpaceMatrix * model * vec4(vpos.x, vpos.yz, 1);
+                gl_Position = LSMm[0] * LSMm[1] * vec4(vpos.x, vpos.yz, 1);
             }
         """,
         fragment_shader="""
@@ -684,7 +658,7 @@ def shaderDepth(vertexBuffer):
             }
         """,
         
-        uniforms={'lightSpaceMatrix': np.identity(4).flatten(), 'model': np.identity(4).flatten()},
+        uniforms={'LSMm': [np.identity(4).flatten(), np.identity(4).flatten()]},
         
         blend={'enable': True, 'src_color': 'src_alpha', 'dst_color': 'one_minus_src_alpha'},
         vertex_buffers= zengl.bind(ctx.buffer(vertexBuffer), "3f", 0),
@@ -730,10 +704,11 @@ class player(entity):
         self.forwards = np.array((cosX, 0, -sinX))
         self.right = np.array((-sinX, 0, -cosX))
 
-        transformMat = np.identity(4)
-        transformMat[0:3,0:3] = create_from_eulers(self.eulers)
-        transformMat[3,0:3] = self.position
-        self.transformMat = transformMat
+        transformMat = create_from_eulers(self.eulers)
+        self.transformMat = [[*transformMat[0], 0],
+                             [*transformMat[1], 0],
+                             [*transformMat[2], 0],
+                             [*self.position,   1]]
     
     def angle(self, frameTime, dPos):
         
@@ -772,7 +747,7 @@ class camera(entity):
         self.forwards = np.array((cosX*cosY, sinY, -sinX*cosY))
         self.playerForwards = (cosX, 0, -sinX)
         self.right = (sinX, 0, cosX)
-        self.up = np.array((-cosX*sinY, cosY, sinX*sinY))
+        self.up = (-cosX*sinY, cosY, sinX*sinY)
         
         self.center = pos
         self.position = self.center - self.zoom * self.forwards
@@ -797,9 +772,9 @@ class camera(entity):
         self.eulers[1] = min(1.5, max(-1.5, self.eulers[1]))
 
     def makeFrustum(self):
-
-        self.frustumParts = [(self.forwards + self.right)/1.4142135787852315, (self.forwards - self.right)/1.4142135787852315, (self.forwards + self.up * 16/9)/2.0397289, (self.forwards - self.up * 16/9)/2.0397289]
-        self.frustum = [[*normal, np.sum(normal * self.position)] for normal in self.frustumParts]
+        
+        normals = [(self.forwards + self.right)*0.70710677298, (self.forwards - self.right)*0.70710677298, (self.forwards * 16/9 + self.up)*0.4902612303, (self.forwards * 16/9 - self.up)*0.4902612303]
+        self.frustum = [[normal, normal[0] * self.position[0] + normal[1] * self.position[1] + normal[2] * self.position[2]] for normal in normals]
 
 class scene:
     
@@ -878,13 +853,9 @@ class scene:
         cosY = np.cos(self.light.eulers[1])
         sinY = np.sin(self.light.eulers[1])
 
-        self.forwards = np.array((cosX*cosY, sinY, -sinX*cosY))
-        self.right = (sinX, 0, cosX)
-        self.up = np.array((-cosX*sinY, cosY, sinX*sinY))
-
-        lightView = get_view(self.forwards, self.up, self.right, self.light.position)
-
-        lightSpaceMatrix = lightView @ lightProjection
+        self.lightforwards = np.array((cosX*cosY, sinY, -sinX*cosY))
+        self.lightright = (sinX, 0, cosX)
+        self.lightup = np.array((-cosX*sinY, cosY, sinX*sinY))
 
         self.entityGrid = [[[] for j in range(500)] for i in range(500)]
         for entity_type, obj in self.entities.items():
@@ -897,12 +868,7 @@ class scene:
                 shader.uniforms['lightposition'][:] = np.ascontiguousarray(self.light.position, 'f').data.cast('B')
                 shader.uniforms['lightcolor'][:] = np.ascontiguousarray(self.light.color, 'f').data.cast('B')
                 shader.uniforms['lightstrength'][:] = np.ascontiguousarray(self.light.strength, 'f').data.cast('B')
-                shader.uniforms['lightSpaceMatrix'][:] = np.ascontiguousarray(lightSpaceMatrix, 'f').data.cast('B')
             
-            for depth in obj[1].depth:
-                
-                depth.uniforms['lightSpaceMatrix'][:] = np.ascontiguousarray(lightSpaceMatrix, 'f').data.cast('B')
-
             if entity_type is ENTITY_TYPE["player"]: continue
             
             meshBoundingBoxes = obj[1].boundingBox + obj[0].position
@@ -918,7 +884,7 @@ class scene:
             self.jumpStartHeight = self.height
         
         t = (jump - self.jumpTime)
-        jumpheight = 5*t - 4.9*(t**2)
+        jumpheight = 0.005*t - 0.0000049 * (t**2)
         
         if jumpheight < (self.height - self.jumpStartHeight):
             self.player.position[1] = self.height
@@ -981,7 +947,7 @@ class scene:
                         
                         normal = self.getNormal(collisionPos, localBoundingBox)
                         leftoverMovement = movement - collisionPos
-                        leftoverMovement -= (normal @ leftoverMovement) * normal
+                        leftoverMovement -= (normal[0] * leftoverMovement[0] + normal[1] * leftoverMovement[1] + normal[2] * leftoverMovement[2]) * normal
                         
                         distanceList.append(distance)
                         collisionPosList.append(collisionPos)
@@ -1043,34 +1009,36 @@ class scene:
         view = cam.getViewTransform()
         frustum = cam.frustum
 
-        self.light.position = self.player.position - 100 * self.forwards
-        lightSpaceMatrix = get_view(self.forwards, self.up, self.right, self.light.position) @ lightProjection
+        self.light.position = self.player.position - 100 * self.lightforwards
+        lightSpaceMatrix = get_view(self.lightforwards, self.lightup, self.lightright, self.light.position) @ lightProjection
         
-        for entity_type, entity in self.entities.items():
-            
-            if entity_type is ENTITY_TYPE['bounding_box']: continue
-            
-            entity[1].drawDepth(entity[0].transformMat, lightSpaceMatrix)
-
-        for entity in self.entities.values():
-            obj, mesh = entity
-            
-            if all([vec4[0:3] @ obj.position - vec4[3] > -entity[0].size for vec4 in frustum]):
-                
-                if mesh.hasJoints:
-                    mesh.pose += 1
-                    mesh.setUniform()
-                
-                mesh.draw(view, obj.transformMat, lightSpaceMatrix, cam.position)
+        [self.drawDepth(entity_type, entity, lightSpaceMatrix) for entity_type, entity in self.entities.items()]
+        [self.draw(entity, lightSpaceMatrix, frustum, view, cam.position) for entity in self.entities.values()]
         
         image.blit(output)
         output.blit()
         ctx.end_frame()
         pygame.display.flip()
+    
+    def drawDepth(self, entity_type, entity, lightSpaceMatrix):
+
+        if entity_type is ENTITY_TYPE['bounding_box']: return    
+        entity[1].drawDepth(entity[0].transformMat, lightSpaceMatrix)
+    
+    def draw(self, entity, lightSpaceMatrix, frustum, view, campos):
+        
+        frustumtest = [(normal[0] * entity[0].position[0] + normal[1] * entity[0].position[1] + normal[2] * entity[0].position[2]) - dis + entity[0].size > 0 for normal, dis in frustum]
+        if all(frustumtest):
+            
+            if entity[1].hasJoints:
+                entity[1].pose += 1
+                entity[1].setUniform()
+            
+            entity[1].draw(view, entity[0].transformMat, lightSpaceMatrix, campos)
 
 class game:
     
-    __slots__ = ("window", "renderer", "scene", "sceneNr", "time", "last_time", "window_time", "frametime", "keys", "scroll", "jump")
+    __slots__ = ("window", "renderer", "scene", "sceneNr", "time", "last_time", "savedtime", "frametime", "savedFramerate", "savedFrames", "keys", "scroll", "jump")
 
     def __init__(self):
         
@@ -1122,30 +1090,21 @@ class game:
 
     def handle_keys(self):
 
-        dPos = 0
+        dPos = [0,0]
         keys = pygame.key.get_pressed()
 
         #this method makes it so holding multible keys doesnt prioritize the first one in the row
-        if keys[input_map["forwards"]]:
-            dPos += np.array([0,1])
-        if keys[input_map["left"]]:
-            dPos += np.array([1,0])
-        if keys[input_map["backwards"]]:
-            dPos -= np.array([0,1])
-        if keys[input_map["right"]]:
-            dPos -= np.array([1,0])
-        if keys[input_map["jump"]]:
-            self.jump = True
-        
-        #this could have been an if statement but this is cooler
+        if keys[input_map["forwards"]]:  dPos[1] += 1
+        if keys[input_map["left"]]:      dPos[0] += 1
+        if keys[input_map["backwards"]]: dPos[1] -= 1
+        if keys[input_map["right"]]:     dPos[0] -= 1
+        if keys[input_map["jump"]]:      self.jump = True
         sprint = keys[input_map["sprint"]]
         
         #the jump code is an ungodly mess, dont touch it if not needed
-        if self.jump:
-            self.jump = self.scene.jump(self.time)
-
-        if np.any(dPos):
-            self.scene.movePlayer(dPos, sprint, self.frametime)
+        if self.jump: self.jump = self.scene.jump(self.time)
+        
+        if dPos[0] or dPos[1]: self.scene.movePlayer(dPos, sprint, self.frametime)
 
     def handle_mouse(self):
         
@@ -1159,18 +1118,26 @@ class game:
         self.last_time = 0
         self.time = 0
         self.frametime = 0
+        self.savedtime = 0
+        self.savedFramerate = 0
+        self.savedFrames = 0
     
     def calculate_framerate(self):
-
-        clock.tick()
-        framerate = clock.get_fps()
-        if framerate != 0:
-            self.frametime = 1000/framerate
         
-        self.time = pygame.time.get_ticks()/1000
-        if self.time - self.last_time > 1:
-            pygame.display.set_caption(f"Running at {int(framerate)} fps.")
-            self.last_time = self.time
+        self.time = time.perf_counter_ns() * 0.000001
+        self.frametime = (self.time - self.last_time)
+        framerate = 1000/self.frametime
+        self.last_time = self.time
+
+        self.savedFramerate += framerate
+        self.savedFrames += 1
+
+        if self.time - self.savedtime > 250:
+
+            pygame.display.set_caption(f"Running at {int(self.savedFramerate/self.savedFrames)} fps.")
+            self.savedtime = self.time
+            self.savedFramerate = 0
+            self.savedFrames = 0
     
     def quit(self):
         
@@ -1251,15 +1218,12 @@ class menu:
     
     def calculate_framerate(self):
 
-        clock.tick()
-        framerate = clock.get_fps()
-        if framerate != 0:
-            self.frametime = 1000/framerate
-        
-        time = pygame.time.get_ticks()/1000
-        if time - self.last_time > 1:
-            pygame.display.set_caption(f"Running at {int(framerate)} fps.")
-            self.last_time = time
+        self.time = time.perf_counter_ns() * 0.000001
+        self.frametime = (self.time - self.last_time)
+        framerate = 1000/self.frametime
+
+        pygame.display.set_caption(f"Running at {int(framerate)} fps.")
+        self.last_time = self.time
     
     def quit(self):
         
@@ -1370,23 +1334,20 @@ class gltfMesh:
     def setUniform(self):
         
         for shader in self.shaders:
-            animation = np.array(self.transformMat[0][self.pose%self.timeData])
+            animation = self.transformMat[0][self.pose%self.timeData]
             shader.uniforms['animation'][:] = np.ascontiguousarray(animation, 'f').data.cast('B')
     
     def draw(self, view, model, lightSpaceMatrix, camPos):
 
         for shader in self.shaders:
-            shader.uniforms['lightSpaceMatrix'][:] = np.ascontiguousarray(lightSpaceMatrix, 'f').data.cast('B')
-            shader.uniforms['view'][:] = np.ascontiguousarray(view, 'f').data.cast('B')
-            shader.uniforms['model'][:] = np.ascontiguousarray(model, 'f').data.cast('B')
+            shader.uniforms['LSMvm'][:] = np.ascontiguousarray([lightSpaceMatrix, view, model], 'f').data.cast('B')
             shader.uniforms['camPos'][:] = np.ascontiguousarray(camPos, 'f').data.cast('B')
             shader.render()
     
     def drawDepth(self, model, lightSpaceMatrix):
 
         for depth in self.depth:
-            depth.uniforms['lightSpaceMatrix'][:] = np.ascontiguousarray(lightSpaceMatrix, 'f').data.cast('B')
-            depth.uniforms['model'][:] = np.ascontiguousarray(model, 'f').data.cast('B')
+            depth.uniforms['LSMm'][:] = np.ascontiguousarray([lightSpaceMatrix, model], 'f').data.cast('B')
             depth.render()
 
 class boundingBoxMesh:
