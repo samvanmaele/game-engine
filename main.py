@@ -33,10 +33,12 @@ screen = pygame.display.set_mode((WIDTH, HEIGHT), flags=pygame.OPENGL|pygame.DOU
 clock = pygame.time.Clock()
 ctx = zengl.context()
 size = pygame.display.get_window_size()
-image = ctx.image(np.array(size), 'rgba8unorm', samples= 4)
-depth = ctx.image(np.array(size), 'depth24plus', samples= 4)
-lightdepth = ctx.image(np.array((1,1)) * 30000, 'depth24plus')
-output = ctx.image(np.array(size), 'rgba8unorm')
+image = ctx.image(size, 'rgba8unorm', samples= 4)
+depth = ctx.image(size, 'depth24plus', samples= 4)
+lightdepth1 = ctx.image((5000, 5000), 'depth24plus')
+lightdepth2 = ctx.image((5000, 5000), 'depth24plus')
+lightdepth3 = ctx.image((5000, 5000), 'depth24plus')
+output = ctx.image(size, 'rgba8unorm')
 
 #####################################################################################
 
@@ -210,12 +212,7 @@ def get_view(forwards, up, right, position):
 
 #####################################################################################
 
-projection = create_perspective_projection_from_bounds(-0.1, 0.1, -0.1*HEIGHT/WIDTH, 0.1*HEIGHT/WIDTH, 0.1, 5000)
-lightSize = 1000
-lightProjection = create_orthogonal_projection(-lightSize, lightSize, -lightSize, lightSize, 0, 2000)
-
-bias = [0.002, 0.0005]
-ctx.includes['biasV'] = f'const vec2 biasV = vec2({bias[0]}, {bias[1]});'
+projection = create_perspective_projection_from_bounds(-0.1, 0.1, -0.1*HEIGHT/WIDTH, 0.1*HEIGHT/WIDTH, 0.1, 1000)
 
 def shader2D(vertexBuffer, texBuffer, texture):
     
@@ -348,8 +345,6 @@ def shader3D(vertexBuffer, normBuffer, texBuffer, texture):
         fragment_shader="""
             #version 300 es
             precision highp float;
-
-            #include "biasV"
             
             in vec2 TexCoords;
             in vec3 fragPos;
@@ -365,7 +360,7 @@ def shader3D(vertexBuffer, normBuffer, texBuffer, texture):
             
             layout (location = 0) out vec4 color;
             
-            float ShadowCalculation(vec4 lightSpace, float bias)
+            float ShadowCalculation(vec4 lightSpace)
             {
                 vec3 projCoords = lightSpace.xyz / lightSpace.w;
                 projCoords = projCoords * 0.5 + 0.5;
@@ -380,7 +375,7 @@ def shader3D(vertexBuffer, normBuffer, texBuffer, texture):
                         shadow += any(lessThan(vec2(0.5), abs(local - 0.5))) ? 1 : 0;
 
                         float pcfDepth = texture(lightdepth, local).r; 
-                        shadow += pcfDepth > (projCoords.z - bias) ? 1 : 0;
+                        shadow += pcfDepth > projCoords.z ? 1 : 0;
                     }    
                 }
 
@@ -406,8 +401,7 @@ def shader3D(vertexBuffer, normBuffer, texBuffer, texture):
                 result += lightval * max(0.0, dotfrag) / distsquared * baseTexture; //diffuse
                 result += lightval * pow(max(0.0, dot(fragNorm, halfVec)), 32.0) / distsquared; //specular
 
-                float bias = max(biasV.x * (1.0 - dotfrag), biasV.y);
-                float shadow = ShadowCalculation(lightSpace, bias);
+                float shadow = ShadowCalculation(lightSpace);
                 return result * shadow;
             }
             
@@ -498,8 +492,6 @@ def shader3Danimated(vertexBuffer, normBuffer, texBuffer, jointDataList, weightD
         fragment_shader="""
             #version 300 es
             precision highp float;
-
-            #include "biasV"
             
             in vec2 TexCoords;
             in vec3 fragPos;
@@ -515,7 +507,7 @@ def shader3Danimated(vertexBuffer, normBuffer, texBuffer, jointDataList, weightD
             
             layout (location = 0) out vec4 color;
             
-            float ShadowCalculation(vec4 lightSpace, float bias)
+            float ShadowCalculation(vec4 lightSpace)
             {
                 vec3 projCoords = lightSpace.xyz / lightSpace.w;
                 projCoords = projCoords * 0.5 + 0.5;
@@ -530,7 +522,7 @@ def shader3Danimated(vertexBuffer, normBuffer, texBuffer, jointDataList, weightD
                         shadow += any(lessThan(vec2(0.5), abs(local - 0.5))) ? 1 : 0;
 
                         float pcfDepth = texture(lightdepth, local).r; 
-                        shadow += pcfDepth > (projCoords.z - bias) ? 1 : 0;
+                        shadow += pcfDepth > projCoords.z ? 1 : 0;
                     }    
                 }
 
@@ -556,8 +548,7 @@ def shader3Danimated(vertexBuffer, normBuffer, texBuffer, jointDataList, weightD
                 result += lightval * max(0.0, dotfrag) / distsquared * baseTexture; //diffuse
                 result += lightval * pow(max(0.0, dot(fragNorm, halfVec)), 32.0) / distsquared; //specular
 
-                float bias = max(biasV.x * (1.0 - dotfrag), biasV.y);
-                float shadow = ShadowCalculation(lightSpace, bias);
+                float shadow = ShadowCalculation(lightSpace);
                 return result * shadow;
             }
             
@@ -668,6 +659,7 @@ def shaderDepth(vertexBuffer):
         
         vertex_count= len(vertexBuffer),
         topology= "triangles",
+        cull_face= "front",
         framebuffer= [lightdepth]
     )
 def shaderTerrain(vertexBuffer, normBuffer, depthmap, texture):
@@ -705,8 +697,6 @@ def shaderTerrain(vertexBuffer, normBuffer, depthmap, texture):
         fragment_shader="""
             #version 300 es
             precision highp float;
-
-            #include "biasV"
             
             in vec2 TexCoords;
             in vec3 fragPos;
@@ -722,7 +712,7 @@ def shaderTerrain(vertexBuffer, normBuffer, depthmap, texture):
             
             layout (location = 0) out vec4 color;
             
-            float ShadowCalculation(vec4 lightSpace, float bias)
+            float ShadowCalculation(vec4 lightSpace)
             {
                 vec3 projCoords = lightSpace.xyz / lightSpace.w;
                 projCoords = projCoords * 0.5 + 0.5;
@@ -737,7 +727,7 @@ def shaderTerrain(vertexBuffer, normBuffer, depthmap, texture):
                         shadow += any(lessThan(vec2(0.5), abs(local - 0.5))) ? 1 : 0;
 
                         float pcfDepth = texture(lightdepth, local).r; 
-                        shadow += pcfDepth > (projCoords.z - bias) ? 1 : 0;
+                        shadow += pcfDepth > projCoords.z ? 1 : 0;
                     }    
                 }
 
@@ -763,8 +753,7 @@ def shaderTerrain(vertexBuffer, normBuffer, depthmap, texture):
                 result += lightval * max(0.0, dotfrag) / distsquared * baseTexture; //diffuse
                 result += lightval * pow(max(0.0, dot(fragNorm, halfVec)), 32.0) / distsquared; //specular
 
-                float bias = max(biasV.x * (1.0 - dotfrag), biasV.y);
-                float shadow = ShadowCalculation(lightSpace, bias);
+                float shadow = ShadowCalculation(lightSpace);
                 return result * shadow;
             }
             
@@ -847,6 +836,7 @@ def shaderTerrainDepth(vertexBuffer, depthmap):
         
         vertex_count= len(vertexBuffer),
         topology= "triangles",
+        cull_face= "front",
         framebuffer= [lightdepth]
     )
 
@@ -969,7 +959,7 @@ class scene:
         
         if sceneNr == 0:
             
-            self.light = pointLight([-1000, 820, -1000], [-1/3*np.pi, -1/12*np.pi, 0], [218, 203, 125], 20000)
+            self.light = pointLight([-1000, 820, -1000], [-1/3*np.pi, -1/12*np.pi, 0], [218, 203, 125], 5000)
             self.terrain = gltfMesh("models/terrain/terrain.gltf", [material("gfx/map8.png"), material("gfx/grass.png")])
 
             self.terrain.shaders.uniforms['ofset'][:] = np.ascontiguousarray(np.round(self.player.position[0:3:2] / 5) * 5, 'f').data.cast('B')
@@ -1033,6 +1023,8 @@ class scene:
                 ENTITY_TYPE["bounding_box"]:      [entity([0,0,0],999),            boundingBoxMesh(                                              )]
                 }
         
+        self.preFrustum = [[-1,-1,-1,1], [-1,-1,1,1], [-1,1,-1,1], [-1,1,1,1], [1,-1,-1,1], [1,-1,1,1], [1,1,-1,1], [1,1,1,1]]
+
         cosX = np.cos(self.light.eulers[0])
         sinX = np.sin(self.light.eulers[0])
         cosY = np.cos(self.light.eulers[1])
@@ -1094,6 +1086,7 @@ class scene:
 
         pos = self.player.position[0:3:2]
         self.terrain.shaders.uniforms['ofset'][:] = np.ascontiguousarray([np.round(pos / 5) * 5], 'f').data.cast('B')
+        self.terrain.depth[0].uniforms['ofset'][:] = np.ascontiguousarray([np.round(pos / 5) * 5], 'f').data.cast('B')
         pos = [int(i * 5/2 + 2500) for i in pos]
 
         mapHeight = [self.heightmap.pixels[pos[1] + x, pos[0] + y][0]/32 for x, y in [(0, -1), (-1, 0), (0, 0), (1, 0), (0, 1)]]
@@ -1104,7 +1097,7 @@ class scene:
         
         self.player.eulers[0] = pitch
         self.player.eulers[1] = roll
-        self.height = max(mapHeight[2] * 125/256, collisionHeight) + 0.1
+        self.height = max(mapHeight[2] * 125/256, collisionHeight - 0.1)
         
         if not self.jumpTime:
             self.player.position[1] = self.height
@@ -1198,9 +1191,30 @@ class scene:
         cam = self.player.camera
         view = cam.getViewTransform()
         frustum = cam.frustum
+        
+        invProjView = np.linalg.inv(view @ projection)
 
-        self.light.position = self.player.position - 1000 * self.lightforwards
-        lightSpaceMatrix = get_view(self.lightforwards, self.lightup, self.lightright, self.light.position) @ lightProjection
+        frustumcorners = self.preFrustum @ invProjView
+        frustumcorners = np.array([pt / pt[3] for pt in frustumcorners])
+
+        center = sum(frustumcorners)/8
+        lightview = get_view(self.lightforwards, self.lightup, self.lightright, center[0:3])
+
+        viewcorners = frustumcorners @ lightview
+
+        cornerX = [*frustumcorners[:, 0], *viewcorners[:, 0]]
+        cornerY = [*frustumcorners[:, 1], *viewcorners[:, 1]]
+        cornerZ = [*frustumcorners[:, 2], *viewcorners[:, 2]]
+
+        minX = min(cornerX)
+        maxX = max(cornerX)
+        minY = min(cornerY)
+        maxY = max(cornerY)
+        minZ = min(cornerZ)
+        maxZ = max(cornerZ)
+
+        lightProjection = create_orthogonal_projection(minX, maxX, minY, maxY, minZ, maxZ)
+        lightSpaceMatrix = lightview @ lightProjection
         
         [self.drawDepth(entity_type, entity, lightSpaceMatrix) for entity_type, entity in self.entities.items()]
         self.terrain.drawDepth(np.identity(4), lightSpaceMatrix)
