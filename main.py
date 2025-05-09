@@ -18,9 +18,8 @@ import zengl
 import cv2
 import sys
 import time
-import cProfile
 
-HEIGHT, WIDTH = 720, 1280
+HEIGHT, WIDTH = 1440, 2560
 
 pygame.init()
 
@@ -360,7 +359,7 @@ def shader3D(vertexBuffer, normBuffer, texBuffer, texture):
             in float viewPosZ;
 
             uniform sampler2D material;
-            uniform sampler2DArray lightdepth;
+            uniform highp sampler2DArray lightdepth;
             uniform float cascadeClip[3];
             uniform vec3 camPos;
             uniform vec3 lightposition[1];
@@ -528,7 +527,7 @@ def shader3Danimated(vertexBuffer, normBuffer, texBuffer, jointDataList, weightD
             in float viewPosZ;
 
             uniform sampler2D material;
-            uniform sampler2DArray lightdepth;
+            uniform highp sampler2DArray lightdepth;
             uniform float cascadeClip[3];
             uniform vec3 camPos;
             uniform vec3 lightposition[1];
@@ -750,7 +749,7 @@ def shaderTerrain(vertexBuffer, normBuffer, depthmap, texture):
             in float viewPosZ;
 
             uniform sampler2D material;
-            uniform sampler2DArray lightdepth;
+            uniform highp sampler2DArray lightdepth;
             uniform float cascadeClip[3];
             uniform vec3 camPos;
             uniform vec3 lightposition[1];
