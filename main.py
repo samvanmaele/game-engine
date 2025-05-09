@@ -20,7 +20,7 @@ import sys
 import time
 import cProfile
 
-HEIGHT, WIDTH = 1080, 1920
+HEIGHT, WIDTH = 720, 1280
 
 pygame.init()
 
@@ -35,9 +35,7 @@ ctx = zengl.context()
 size = pygame.display.get_window_size()
 image = ctx.image(size, 'rgba8unorm', samples= 4)
 depth = ctx.image(size, 'depth24plus', samples= 4)
-lightdepth1 = ctx.image((5000, 5000), 'depth24plus')
-lightdepth2 = ctx.image((5000, 5000), 'depth24plus')
-lightdepth3 = ctx.image((5000, 5000), 'depth24plus')
+lightdepth = ctx.image((5000, 5000), 'depth24plus', array= 3)
 output = ctx.image(size, 'rgba8unorm')
 
 #####################################################################################
@@ -212,7 +210,9 @@ def get_view(forwards, up, right, position):
 
 #####################################################################################
 
-projection = create_perspective_projection_from_bounds(-0.1, 0.1, -0.1*HEIGHT/WIDTH, 0.1*HEIGHT/WIDTH, 0.1, 1000)
+nearplane, farplane = 0.1, 1000
+depthlayers = [nearplane, farplane/50, farplane/10, farplane]
+projection = create_perspective_projection_from_bounds(-0.1, 0.1, -0.1*HEIGHT/WIDTH, 0.1*HEIGHT/WIDTH, nearplane, farplane)
 
 def shader2D(vertexBuffer, texBuffer, texture):
     
@@ -324,22 +324,29 @@ def shader3D(vertexBuffer, normBuffer, texBuffer, texture):
             layout(location = 2) in vec2 vtex;
             
             uniform mat4 projection;
-            uniform mat4 LSMvm[3];
+            uniform mat4 LSMvm[5];
             
             out vec2 TexCoords;
             out vec3 fragPos;
             out vec3 fragNorm;
-            out vec4 lightSpace;
+            out vec4 lightSpace[3];
+            out float viewPosZ;
             
             void main()
             {
-                vec4 vertPos = LSMvm[2] * vec4(vpos, 1.0);
+                vec4 vertPos = LSMvm[4] * vec4(vpos, 1.0);
                 
                 TexCoords = vtex;
                 fragPos = vertPos.xyz;
-                fragNorm = (LSMvm[2] * vec4(vnorm, 0)).xyz;
-                lightSpace = LSMvm[0] * vertPos;
-                gl_Position = projection * LSMvm[1] * vertPos;
+                fragNorm = (LSMvm[4] * vec4(vnorm, 0)).xyz;
+
+                for (int i = 0; i < 3; i++) {
+                    lightSpace[i] = LSMvm[i] * vertPos;
+                }
+
+                vec4 viewPos = LSMvm[3] * vertPos;
+                viewPosZ = viewPos.z;
+                gl_Position = projection * viewPos;
             }
         """,
         fragment_shader="""
@@ -349,10 +356,12 @@ def shader3D(vertexBuffer, normBuffer, texBuffer, texture):
             in vec2 TexCoords;
             in vec3 fragPos;
             in vec3 fragNorm;
-            in vec4 lightSpace;
+            in vec4 lightSpace[3];
+            in float viewPosZ;
 
             uniform sampler2D material;
-            uniform sampler2D lightdepth;
+            uniform sampler2DArray lightdepth;
+            uniform float cascadeClip[3];
             uniform vec3 camPos;
             uniform vec3 lightposition[1];
             uniform vec3 lightcolor[1];
@@ -360,21 +369,32 @@ def shader3D(vertexBuffer, normBuffer, texBuffer, texture):
             
             layout (location = 0) out vec4 color;
             
-            float ShadowCalculation(vec4 lightSpace)
+            float ShadowCalculation()
             {
-                vec3 projCoords = lightSpace.xyz / lightSpace.w;
+                int cascadeIndex = 2;
+                for (int i = 0 ; i < 2 ; i++)
+                {
+                    if (-viewPosZ <= cascadeClip[i])
+                    {
+                        cascadeIndex = i;
+                        break;
+                    }
+                }
+                
+                vec4 space = lightSpace[cascadeIndex];
+                vec3 projCoords = space.xyz / space.w;
                 projCoords = projCoords * 0.5 + 0.5;
 
                 int shadow = 0;
-                vec2 texelSize = 1.0 / vec2(textureSize(lightdepth, 0));
-                for(int x = -1; x <= 1; ++x)
+                vec2 texelSize = 1.0 / vec2(textureSize(lightdepth, cascadeIndex));
+                for (int x = -1; x <= 1; ++x)
                 {
-                    for(int y = -1; y <= 1; ++y)
+                    for (int y = -1; y <= 1; ++y)
                     {
                         vec2 local = projCoords.xy + vec2(x, y) * texelSize;
                         shadow += any(lessThan(vec2(0.5), abs(local - 0.5))) ? 1 : 0;
 
-                        float pcfDepth = texture(lightdepth, local).r; 
+                        float pcfDepth = texture(lightdepth, vec3(local, cascadeIndex)).r; 
                         shadow += pcfDepth > projCoords.z ? 1 : 0;
                     }    
                 }
@@ -401,7 +421,7 @@ def shader3D(vertexBuffer, normBuffer, texBuffer, texture):
                 result += lightval * max(0.0, dotfrag) / distsquared * baseTexture; //diffuse
                 result += lightval * pow(max(0.0, dot(fragNorm, halfVec)), 32.0) / distsquared; //specular
 
-                float shadow = ShadowCalculation(lightSpace);
+                float shadow = ShadowCalculation();
                 return result * shadow;
             }
             
@@ -410,13 +430,14 @@ def shader3D(vertexBuffer, normBuffer, texBuffer, texture):
                 vec4 baseTex = texture(material, TexCoords);
                 vec3 temp = 0.2 * baseTex.rgb; //ambient
                 temp += calcPointlight(0);
-                
+
                 color = pow(vec4(temp, baseTex.a), vec4(0.45));
             }
         """,
         
         uniforms={'projection': projection.flatten(),
-                  'LSMvm': [np.identity(4).flatten(), np.identity(4).flatten(), np.identity(4).flatten()],
+                  'LSMvm': [np.identity(4).flatten(), np.identity(4).flatten(), np.identity(4).flatten(), np.identity(4).flatten(), np.identity(4).flatten()],
+                  'cascadeClip': depthlayers[1:4],
                   'camPos' : [0,0,0],
                   'lightposition': [[0, 1000, 0]],
                   'lightcolor': [[255,255,255]],
@@ -451,13 +472,14 @@ def shader3Danimated(vertexBuffer, normBuffer, texBuffer, jointDataList, weightD
             layout(location = 4) in vec4 vweights;
             
             uniform mat4 projection;
-            uniform mat4 LSMvm[3];
+            uniform mat4 LSMvm[5];
             uniform mat4 animation[50];
             
             out vec2 TexCoords;
             out vec3 fragPos;
             out vec3 fragNorm;
-            out vec4 lightSpace;
+            out vec4 lightSpace[3];
+            out float viewPosZ;
             
             vec4 applyBone(vec4 p)
             {
@@ -480,13 +502,19 @@ def shader3Danimated(vertexBuffer, normBuffer, texBuffer, jointDataList, weightD
                 vec4 position = applyBone(vec4(vpos, 1.0));
                 vec4 normal = normalize(applyBone(vec4(vnorm, 0.0)));
                 
-                vec4 vertPos = LSMvm[2] * position;
+                vec4 vertPos = LSMvm[4] * position;
                 
                 TexCoords = vtex;
                 fragPos = vertPos.xyz;
-                fragNorm = (LSMvm[2] * normal).xyz;
-                lightSpace = LSMvm[0] * vertPos;
-                gl_Position = projection * LSMvm[1] * vertPos;
+                fragNorm = (LSMvm[4] * normal).xyz;
+
+                for (int i = 0; i < 3; i++) {
+                    lightSpace[i] = LSMvm[i] * vertPos;
+                }
+
+                vec4 viewPos = LSMvm[3] * vertPos;
+                viewPosZ = viewPos.z;
+                gl_Position = projection * viewPos;
             }
         """,
         fragment_shader="""
@@ -496,10 +524,12 @@ def shader3Danimated(vertexBuffer, normBuffer, texBuffer, jointDataList, weightD
             in vec2 TexCoords;
             in vec3 fragPos;
             in vec3 fragNorm;
-            in vec4 lightSpace;
+            in vec4 lightSpace[3];
+            in float viewPosZ;
 
             uniform sampler2D material;
-            uniform sampler2D lightdepth;
+            uniform sampler2DArray lightdepth;
+            uniform float cascadeClip[3];
             uniform vec3 camPos;
             uniform vec3 lightposition[1];
             uniform vec3 lightcolor[1];
@@ -507,21 +537,32 @@ def shader3Danimated(vertexBuffer, normBuffer, texBuffer, jointDataList, weightD
             
             layout (location = 0) out vec4 color;
             
-            float ShadowCalculation(vec4 lightSpace)
+            float ShadowCalculation()
             {
-                vec3 projCoords = lightSpace.xyz / lightSpace.w;
+                int cascadeIndex = 2;
+                for (int i = 0 ; i < 2 ; i++)
+                {
+                    if (-viewPosZ <= cascadeClip[i])
+                    {
+                        cascadeIndex = i;
+                        break;
+                    }
+                }
+                
+                vec4 space = lightSpace[cascadeIndex];
+                vec3 projCoords = space.xyz / space.w;
                 projCoords = projCoords * 0.5 + 0.5;
 
                 int shadow = 0;
-                vec2 texelSize = 1.0 / vec2(textureSize(lightdepth, 0));
-                for(int x = -1; x <= 1; ++x)
+                vec2 texelSize = 1.0 / vec2(textureSize(lightdepth, cascadeIndex));
+                for (int x = -1; x <= 1; ++x)
                 {
-                    for(int y = -1; y <= 1; ++y)
+                    for (int y = -1; y <= 1; ++y)
                     {
                         vec2 local = projCoords.xy + vec2(x, y) * texelSize;
                         shadow += any(lessThan(vec2(0.5), abs(local - 0.5))) ? 1 : 0;
 
-                        float pcfDepth = texture(lightdepth, local).r; 
+                        float pcfDepth = texture(lightdepth, vec3(local, cascadeIndex)).r; 
                         shadow += pcfDepth > projCoords.z ? 1 : 0;
                     }    
                 }
@@ -548,7 +589,7 @@ def shader3Danimated(vertexBuffer, normBuffer, texBuffer, jointDataList, weightD
                 result += lightval * max(0.0, dotfrag) / distsquared * baseTexture; //diffuse
                 result += lightval * pow(max(0.0, dot(fragNorm, halfVec)), 32.0) / distsquared; //specular
 
-                float shadow = ShadowCalculation(lightSpace);
+                float shadow = ShadowCalculation();
                 return result * shadow;
             }
             
@@ -557,13 +598,13 @@ def shader3Danimated(vertexBuffer, normBuffer, texBuffer, jointDataList, weightD
                 vec4 baseTex = texture(material, TexCoords);
                 vec3 temp = 0.2 * baseTex.rgb; //ambient
                 temp += calcPointlight(0);
-                
+
                 color = pow(vec4(temp, baseTex.a), vec4(0.45));
             }
         """,
         
         uniforms={'projection': projection.flatten(),
-                  'LSMvm': [np.identity(4).flatten(), np.identity(4).flatten(), np.identity(4).flatten()],
+                  'LSMvm': [np.identity(4).flatten(), np.identity(4).flatten(), np.identity(4).flatten(), np.identity(4).flatten(), np.identity(4).flatten()],
                   'animation': [np.identity(4) for i in range(nrJoints)],
                   'camPos': [0,0,0],
                   'lightposition': [[0, 1000, 0]],
@@ -626,7 +667,7 @@ def shaderBoundingBox():
     )
 def shaderDepth(vertexBuffer):
 
-    return ctx.pipeline(
+    return [ctx.pipeline(
         vertex_shader="""
             #version 300 es
             precision highp float;
@@ -644,11 +685,8 @@ def shaderDepth(vertexBuffer):
             #version 300 es
             precision highp float;
 
-            layout (location = 0) out vec4 out_color;
-
             void main()
             {
-                out_color = vec4(vec3(gl_FragCoord.z), 1);
             }
         """,
         
@@ -660,8 +698,8 @@ def shaderDepth(vertexBuffer):
         vertex_count= len(vertexBuffer),
         topology= "triangles",
         cull_face= "front",
-        framebuffer= [lightdepth]
-    )
+        framebuffer= [lightdepth.face(cascadeIndex)]
+    ) for cascadeIndex in range(3)]
 def shaderTerrain(vertexBuffer, normBuffer, depthmap, texture):
     
     return ctx.pipeline(
@@ -673,14 +711,15 @@ def shaderTerrain(vertexBuffer, normBuffer, depthmap, texture):
             layout(location = 1) in vec3 vnorm;
 
             uniform mat4 projection;
-            uniform mat4 LSMv[2];
+            uniform mat4 LSMv[4];
             uniform sampler2D heightmap;
             uniform vec2 ofset;
 
             out vec2 TexCoords;
             out vec3 fragPos;
             out vec3 fragNorm;
-            out vec4 lightSpace;
+            out vec4 lightSpace[3];
+            out float viewPosZ;
 
             void main()
             {
@@ -690,8 +729,14 @@ def shaderTerrain(vertexBuffer, normBuffer, depthmap, texture):
 
                 fragPos = vpos + vec3(ofset.x, height, ofset.y);
                 fragNorm = vnorm;
-                lightSpace = LSMv[0] * vec4(fragPos, 1);
-                gl_Position = projection * LSMv[1] * vec4(fragPos, 1);
+
+                for (int i = 0; i < 3; i++) {
+                    lightSpace[i] = LSMv[i] * vec4(fragPos, 1);
+                }
+
+                vec4 viewPos = LSMv[3] * vec4(fragPos, 1);
+                viewPosZ = viewPos.z;
+                gl_Position = projection * viewPos;
             }
         """,
         fragment_shader="""
@@ -701,10 +746,12 @@ def shaderTerrain(vertexBuffer, normBuffer, depthmap, texture):
             in vec2 TexCoords;
             in vec3 fragPos;
             in vec3 fragNorm;
-            in vec4 lightSpace;
+            in vec4 lightSpace[3];
+            in float viewPosZ;
 
             uniform sampler2D material;
-            uniform sampler2D lightdepth;
+            uniform sampler2DArray lightdepth;
+            uniform float cascadeClip[3];
             uniform vec3 camPos;
             uniform vec3 lightposition[1];
             uniform vec3 lightcolor[1];
@@ -712,21 +759,32 @@ def shaderTerrain(vertexBuffer, normBuffer, depthmap, texture):
             
             layout (location = 0) out vec4 color;
             
-            float ShadowCalculation(vec4 lightSpace)
+            float ShadowCalculation()
             {
-                vec3 projCoords = lightSpace.xyz / lightSpace.w;
+                int cascadeIndex = 2;
+                for (int i = 0 ; i < 2 ; i++)
+                {
+                    if (-viewPosZ <= cascadeClip[i])
+                    {
+                        cascadeIndex = i;
+                        break;
+                    }
+                }
+                
+                vec4 space = lightSpace[cascadeIndex];
+                vec3 projCoords = space.xyz / space.w;
                 projCoords = projCoords * 0.5 + 0.5;
 
                 int shadow = 0;
-                vec2 texelSize = 1.0 / vec2(textureSize(lightdepth, 0));
-                for(int x = -1; x <= 1; ++x)
+                vec2 texelSize = 1.0 / vec2(textureSize(lightdepth, cascadeIndex));
+                for (int x = -1; x <= 1; ++x)
                 {
-                    for(int y = -1; y <= 1; ++y)
+                    for (int y = -1; y <= 1; ++y)
                     {
                         vec2 local = projCoords.xy + vec2(x, y) * texelSize;
                         shadow += any(lessThan(vec2(0.5), abs(local - 0.5))) ? 1 : 0;
 
-                        float pcfDepth = texture(lightdepth, local).r; 
+                        float pcfDepth = texture(lightdepth, vec3(local, cascadeIndex)).r; 
                         shadow += pcfDepth > projCoords.z ? 1 : 0;
                     }    
                 }
@@ -753,7 +811,7 @@ def shaderTerrain(vertexBuffer, normBuffer, depthmap, texture):
                 result += lightval * max(0.0, dotfrag) / distsquared * baseTexture; //diffuse
                 result += lightval * pow(max(0.0, dot(fragNorm, halfVec)), 32.0) / distsquared; //specular
 
-                float shadow = ShadowCalculation(lightSpace);
+                float shadow = ShadowCalculation();
                 return result * shadow;
             }
             
@@ -762,14 +820,14 @@ def shaderTerrain(vertexBuffer, normBuffer, depthmap, texture):
                 vec4 baseTex = texture(material, TexCoords);
                 vec3 temp = 0.2 * baseTex.rgb; //ambient
                 temp += calcPointlight(0);
-                
+
                 color = pow(vec4(temp, baseTex.a), vec4(0.45));
             }
         """,
         
         uniforms={'projection': projection.flatten(),
                   'ofset': [0, 0],
-                  'LSMv': [np.identity(4).flatten(), np.identity(4).flatten()],
+                  'LSMv': [np.identity(4).flatten(), np.identity(4).flatten(), np.identity(4).flatten(), np.identity(4).flatten()],
                   'camPos' : [0,0,0],
                   'lightposition': [[0, 1000, 0]],
                   'lightcolor': [[255,255,255]],
@@ -793,7 +851,7 @@ def shaderTerrain(vertexBuffer, normBuffer, depthmap, texture):
         )
 def shaderTerrainDepth(vertexBuffer, depthmap):
 
-    return ctx.pipeline(
+    return [ctx.pipeline(
         vertex_shader="""
             #version 300 es
             precision highp float;
@@ -818,11 +876,8 @@ def shaderTerrainDepth(vertexBuffer, depthmap):
             #version 300 es
             precision highp float;
 
-            layout (location = 0) out vec4 out_color;
-
             void main()
             {
-                out_color = vec4(vec3(gl_FragCoord.z), 1);
             }
         """,
         
@@ -837,8 +892,8 @@ def shaderTerrainDepth(vertexBuffer, depthmap):
         vertex_count= len(vertexBuffer),
         topology= "triangles",
         cull_face= "front",
-        framebuffer= [lightdepth]
-    )
+        framebuffer= [lightdepth.face(cascadeIndex)]
+    ) for cascadeIndex in range(3)]
 
 #####################################################################################
 
@@ -1086,7 +1141,9 @@ class scene:
 
         pos = self.player.position[0:3:2]
         self.terrain.shaders.uniforms['ofset'][:] = np.ascontiguousarray([np.round(pos / 5) * 5], 'f').data.cast('B')
-        self.terrain.depth[0].uniforms['ofset'][:] = np.ascontiguousarray([np.round(pos / 5) * 5], 'f').data.cast('B')
+        for cascade in self.terrain.depth[0]:
+            cascade.uniforms['ofset'][:] = np.ascontiguousarray([np.round(pos / 5) * 5], 'f').data.cast('B')
+        
         pos = [int(i * 5/2 + 2500) for i in pos]
 
         mapHeight = [self.heightmap.pixels[pos[1] + x, pos[0] + y][0]/32 for x, y in [(0, -1), (-1, 0), (0, 0), (1, 0), (0, 1)]]
@@ -1191,30 +1248,8 @@ class scene:
         cam = self.player.camera
         view = cam.getViewTransform()
         frustum = cam.frustum
-        
-        invProjView = np.linalg.inv(view @ projection)
 
-        frustumcorners = self.preFrustum @ invProjView
-        frustumcorners = np.array([pt / pt[3] for pt in frustumcorners])
-
-        center = sum(frustumcorners)/8
-        lightview = get_view(self.lightforwards, self.lightup, self.lightright, center[0:3])
-
-        viewcorners = frustumcorners @ lightview
-
-        cornerX = [*frustumcorners[:, 0], *viewcorners[:, 0]]
-        cornerY = [*frustumcorners[:, 1], *viewcorners[:, 1]]
-        cornerZ = [*frustumcorners[:, 2], *viewcorners[:, 2]]
-
-        minX = min(cornerX)
-        maxX = max(cornerX)
-        minY = min(cornerY)
-        maxY = max(cornerY)
-        minZ = min(cornerZ)
-        maxZ = max(cornerZ)
-
-        lightProjection = create_orthogonal_projection(minX, maxX, minY, maxY, minZ, maxZ)
-        lightSpaceMatrix = lightview @ lightProjection
+        lightSpaceMatrix = [self.makeLightProjection(view, depthlayers[i], depthlayers[i+1]) for i in range(3)]
         
         [self.drawDepth(entity_type, entity, lightSpaceMatrix) for entity_type, entity in self.entities.items()]
         self.terrain.drawDepth(np.identity(4), lightSpaceMatrix)
@@ -1227,6 +1262,41 @@ class scene:
         ctx.end_frame()
         pygame.display.flip()
     
+    def makeLightProjection(self, view, nearplane, farplane):
+
+        proj = create_perspective_projection_from_bounds(-nearplane, nearplane, -nearplane, nearplane, nearplane, farplane)
+        invProjView = np.linalg.inv(view @ proj)
+
+        frustumcorners = self.preFrustum @ invProjView
+        frustumcorners = np.array([pt / pt[3] for pt in frustumcorners])
+
+        center = sum(frustumcorners)/8
+        lightview = get_view(self.lightforwards, self.lightup, self.lightright, center[0:3])
+
+        viewcorners = frustumcorners @ lightview
+
+        cornerX = [*viewcorners[:, 0]]
+        cornerY = [*viewcorners[:, 1]]
+        cornerZ = [*viewcorners[:, 2]]
+
+        minX = min(cornerX)
+        maxX = max(cornerX)
+        minY = min(cornerY)
+        maxY = max(cornerY)
+        minZ = min(cornerZ)
+        maxZ = max(cornerZ)
+
+        if minZ < 0: minZ *= 2
+        else: minZ *= 0.5
+
+        if maxZ < 0: maxZ *= 0.5
+        else: maxZ *= 2
+
+        lightProjection = create_orthogonal_projection(minX, maxX, minY, maxY, -maxZ, -minZ)
+        lightSpaceMatrix = lightview @ lightProjection
+
+        return lightSpaceMatrix
+
     def drawDepth(self, entity_type, entity, lightSpaceMatrix):
 
         if entity_type is ENTITY_TYPE['bounding_box']: return    
@@ -1559,7 +1629,7 @@ class gltfMesh:
     def draw(self, view, model, lightSpaceMatrix, camPos, lightpos):
 
         for shader in self.shaders:
-            shader.uniforms['LSMvm'][:] = np.ascontiguousarray([lightSpaceMatrix, view, model], 'f').data.cast('B')
+            shader.uniforms['LSMvm'][:] = np.ascontiguousarray([*lightSpaceMatrix, view, model], 'f').data.cast('B')
             shader.uniforms['lightposition'][:] = np.ascontiguousarray(lightpos, 'f').data.cast('B')
             shader.uniforms['camPos'][:] = np.ascontiguousarray(camPos, 'f').data.cast('B')
             shader.render()
@@ -1567,12 +1637,14 @@ class gltfMesh:
     def drawDepth(self, model, lightSpaceMatrix):
 
         for depth in self.depth:
-            depth.uniforms['LSMm'][:] = np.ascontiguousarray([lightSpaceMatrix, model], 'f').data.cast('B')
-            depth.render()
+            for i in range(3):
+                cascade = depth[i]
+                cascade.uniforms['LSMm'][:] = np.ascontiguousarray([lightSpaceMatrix[i], model], 'f').data.cast('B')
+                cascade.render()
     
     def drawTerrain(self, view, lightSpaceMatrix, lightpos):
 
-        self.shaders.uniforms['LSMv'][:] = np.ascontiguousarray([lightSpaceMatrix, view], 'f').data.cast('B')
+        self.shaders.uniforms['LSMv'][:] = np.ascontiguousarray([*lightSpaceMatrix, view], 'f').data.cast('B')
         self.shaders.uniforms['lightposition'][:] = np.ascontiguousarray(lightpos, 'f').data.cast('B')
         self.shaders.render()
 
