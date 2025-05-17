@@ -1,4 +1,4 @@
-# python -m pygbag --PYBUILD 3.12 --ume_block 0 --template noctx.tmpl .
+# python -m pygbag --PYBUILD 3.12 --ume_block 0 --git --template noctx.tmpl .
 
 # /// script
 # dependencies = [
@@ -29,9 +29,16 @@ pygame.init()
 #pygame.mixer.music.play(-1)
 
 pygame.display.init()
-pygame.display.gl_set_attribute(pygame.GL_CONTEXT_MAJOR_VERSION, 3)
-pygame.display.gl_set_attribute(pygame.GL_CONTEXT_MINOR_VERSION, 3)
-pygame.display.gl_set_attribute(pygame.GL_CONTEXT_PROFILE_MASK, pygame.GL_CONTEXT_PROFILE_CORE)
+
+if sys.platform == "emscripten":
+    pygame.display.gl_set_attribute(pygame.GL_CONTEXT_MAJOR_VERSION, 3)
+    pygame.display.gl_set_attribute(pygame.GL_CONTEXT_MINOR_VERSION, 0)
+    pygame.display.gl_set_attribute(pygame.GL_CONTEXT_PROFILE_MASK, pygame.GL_CONTEXT_PROFILE_ES)
+else:
+    pygame.display.gl_set_attribute(pygame.GL_CONTEXT_MAJOR_VERSION, 3)
+    pygame.display.gl_set_attribute(pygame.GL_CONTEXT_MINOR_VERSION, 3)
+    pygame.display.gl_set_attribute(pygame.GL_CONTEXT_PROFILE_MASK, pygame.GL_CONTEXT_PROFILE_CORE)
+
 pygame.display.gl_set_attribute(pygame.GL_CONTEXT_FORWARD_COMPATIBLE_FLAG, 1)
 
 screen = pygame.display.set_mode((WIDTH, HEIGHT), flags=pygame.OPENGL|pygame.DOUBLEBUF)
@@ -222,7 +229,7 @@ def shader2D(vertexBuffer, texBuffer, texture):
     
     return ctx.pipeline(
         vertex_shader="""
-            #version 330 core
+            #version 300 es
             precision highp float;
             
             layout(location = 0) in vec2 vpos;
@@ -237,7 +244,7 @@ def shader2D(vertexBuffer, texBuffer, texture):
             }
         """,
         fragment_shader="""
-            #version 330 core
+            #version 300 es
             precision highp float;
             
             in vec2 TexCoords;
@@ -271,7 +278,7 @@ def shader2Danitex(vertexBuffer, texBuffer, texture, frameAmount):
     
     return ctx.pipeline(
         vertex_shader="""
-            #version 330 core
+            #version 300 es
             precision highp float;
             
             layout(location = 0) in vec2 vpos;
@@ -287,7 +294,7 @@ def shader2Danitex(vertexBuffer, texBuffer, texture, frameAmount):
             }
         """,
         fragment_shader="""
-            #version 330 core
+            #version 300 es
             precision highp float;
             
             in vec2 TexCoords;
@@ -320,7 +327,7 @@ def shader3D(vertexBuffer, normBuffer, texBuffer, texture):
     
     return ctx.pipeline(
         vertex_shader="""
-            #version 330 core
+            #version 300 es
             precision highp float;
             
             layout(location = 0) in vec3 vpos;
@@ -354,7 +361,7 @@ def shader3D(vertexBuffer, normBuffer, texBuffer, texture):
             }
         """,
         fragment_shader="""
-            #version 330 core
+            #version 300 es
             precision highp float;
             
             in vec2 TexCoords;
@@ -398,7 +405,7 @@ def shader3D(vertexBuffer, normBuffer, texBuffer, texture):
                         vec2 local = projCoords.xy + vec2(x, y) * texelSize;
                         shadow += any(lessThan(vec2(0.5), abs(local - 0.5))) ? 1 : 0;
 
-                        float pcfDepth = 1 - texture(lightdepth, local)[cascadeIndex]; 
+                        float pcfDepth = 1.0 - texture(lightdepth, local)[cascadeIndex]; 
                         shadow += (pcfDepth + 0.00005) > projCoords.z ? 1 : 0;
                     }
                 }
@@ -466,7 +473,7 @@ def shader3Danimated(vertexBuffer, normBuffer, texBuffer, jointDataList, weightD
     
     return ctx.pipeline(
         vertex_shader="""
-            #version 330 core
+            #version 300 es
             precision highp float;
             
             layout(location = 0) in vec3 vpos;
@@ -522,7 +529,7 @@ def shader3Danimated(vertexBuffer, normBuffer, texBuffer, jointDataList, weightD
             }
         """,
         fragment_shader="""
-            #version 330 core
+            #version 300 es
             precision highp float;
             
             in vec2 TexCoords;
@@ -566,7 +573,7 @@ def shader3Danimated(vertexBuffer, normBuffer, texBuffer, jointDataList, weightD
                         vec2 local = projCoords.xy + vec2(x, y) * texelSize;
                         shadow += any(lessThan(vec2(0.5), abs(local - 0.5))) ? 1 : 0;
 
-                        float pcfDepth = 1 - texture(lightdepth, local)[cascadeIndex]; 
+                        float pcfDepth = 1.0 - texture(lightdepth, local)[cascadeIndex]; 
                         shadow += (pcfDepth + 0.00005) > projCoords.z ? 1 : 0;
                     }    
                 }
@@ -636,7 +643,7 @@ def shaderBoundingBox():
     
     return ctx.pipeline(
         vertex_shader="""
-            #version 330 core
+            #version 300 es
             precision highp float;
             
             layout (location = 0) in int vert;
@@ -651,7 +658,7 @@ def shaderBoundingBox():
             }
         """,
         fragment_shader="""
-            #version 330 core
+            #version 300 es
             precision highp float;
             
             layout (location = 0) out vec4 out_color;
@@ -674,7 +681,7 @@ def shaderDepth(vertexBuffer):
 
     return ctx.pipeline(
         vertex_shader="""
-            #version 330 core
+            #version 300 es
             #extension GL_AMD_vertex_shader_layer : enable
             precision highp float;
             
@@ -691,7 +698,7 @@ def shaderDepth(vertexBuffer):
             }
         """,
         fragment_shader="""
-            #version 330 core
+            #version 300 es
             precision highp float;
 
             flat in int instanceID;
@@ -700,7 +707,9 @@ def shaderDepth(vertexBuffer):
 
             void main()
             {
-                colour[instanceID] = 1.0 - gl_FragCoord.z;
+                vec4 tempcol = vec4(0.0);
+                tempcol[instanceID] = 1.0 - gl_FragCoord.z;
+                colour = tempcol;
             }
         """,
         
@@ -720,7 +729,7 @@ def shaderTerrain(vertexBuffer, normmap, depthmap, texture):
     
     return ctx.pipeline(
         vertex_shader="""
-            #version 330 core
+            #version 300 es
             precision highp float;
             
             layout(location = 0) in vec3 vpos;
@@ -756,7 +765,7 @@ def shaderTerrain(vertexBuffer, normmap, depthmap, texture):
             }
         """,
         fragment_shader="""
-            #version 330 core
+            #version 300 es
             precision highp float;
             
             in vec2 TexCoords;
@@ -800,7 +809,7 @@ def shaderTerrain(vertexBuffer, normmap, depthmap, texture):
                         vec2 local = projCoords.xy + vec2(x, y) * texelSize;
                         shadow += any(lessThan(vec2(0.5), abs(local - 0.5))) ? 1 : 0;
 
-                        float pcfDepth = 1 - texture(lightdepth, local)[cascadeIndex]; 
+                        float pcfDepth = 1.0 - texture(lightdepth, local)[cascadeIndex]; 
                         shadow += (pcfDepth + 0.00005) > projCoords.z ? 1 : 0;
                     }
                 }
@@ -871,7 +880,7 @@ def shaderTerrainDepth(vertexBuffer, depthmap):
 
     return ctx.pipeline(
         vertex_shader="""
-            #version 330 core
+            #version 300 es
             #extension GL_AMD_vertex_shader_layer : enable
             precision highp float;
             
@@ -895,7 +904,7 @@ def shaderTerrainDepth(vertexBuffer, depthmap):
             }
         """,
         fragment_shader="""
-            #version 330 core
+            #version 300 es
             precision highp float;
 
             flat in int instanceID;
@@ -904,7 +913,9 @@ def shaderTerrainDepth(vertexBuffer, depthmap):
 
             void main()
             {
-                colour[instanceID] = 1.0 - gl_FragCoord.z;
+                vec4 tempcol = vec4(0.0);
+                tempcol[instanceID] = 1.0 - gl_FragCoord.z;
+                colour = tempcol;
             }
         """,
         
