@@ -19,7 +19,7 @@ import cv2
 import sys
 import time
 
-HEIGHT, WIDTH = 1440, 2560
+HEIGHT, WIDTH = 1080, 1920
 
 pygame.init()
 
@@ -28,13 +28,20 @@ pygame.init()
 #audio1 = pygame.mixer.music.load("sfx/NeuroSama-Goddess.ogg")
 #pygame.mixer.music.play(-1)
 
+pygame.display.init()
+pygame.display.gl_set_attribute(pygame.GL_CONTEXT_MAJOR_VERSION, 3)
+pygame.display.gl_set_attribute(pygame.GL_CONTEXT_MINOR_VERSION, 3)
+pygame.display.gl_set_attribute(pygame.GL_CONTEXT_PROFILE_MASK, pygame.GL_CONTEXT_PROFILE_CORE)
+pygame.display.gl_set_attribute(pygame.GL_CONTEXT_FORWARD_COMPATIBLE_FLAG, 1)
+
 screen = pygame.display.set_mode((WIDTH, HEIGHT), flags=pygame.OPENGL|pygame.DOUBLEBUF)
 clock = pygame.time.Clock()
 ctx = zengl.context()
+
 size = pygame.display.get_window_size()
 image = ctx.image(size, 'rgba8unorm', samples= 4)
 depth = ctx.image(size, 'depth24plus', samples= 4)
-lightdepth = ctx.image((5000, 5000), 'depth24plus', array= 3)
+lightdepth = ctx.image((5000, 5000), 'rgba32float')
 output = ctx.image(size, 'rgba8unorm')
 
 #####################################################################################
@@ -77,8 +84,6 @@ ENTITY_TYPE = {"player": 0,
 #pyrr functions that i copied cuz import pyrr causes long load times in browsers
 
 def create_perspective_projection_from_bounds(left, right, bottom, top, near, far, dtype=None):
-    A = (right + left) / (right - left)
-    B = (top + bottom) / (top - bottom)
     C = -(far + near) / (far - near)
     D = -2. * far * near / (far - near)
     E = 2. * near / (right - left)
@@ -86,7 +91,7 @@ def create_perspective_projection_from_bounds(left, right, bottom, top, near, fa
 
     return np.array(((E,  0., 0., 0.),
                      (0., F,  0., 0.),
-                     (A,  B,  C, -1.),
+                     (0., 0., C, -1.),
                      (0., 0., D,  0.))
     )
 def create_orthogonal_projection(left, right, bottom, top, near, far, dtype=None):
@@ -210,14 +215,14 @@ def get_view(forwards, up, right, position):
 #####################################################################################
 
 nearplane, farplane = 0.1, 1000
-depthlayers = [nearplane, farplane/50, farplane/10, farplane]
+depthlayers = [nearplane, farplane/50, farplane/10, farplane/5, farplane]
 projection = create_perspective_projection_from_bounds(-0.1, 0.1, -0.1*HEIGHT/WIDTH, 0.1*HEIGHT/WIDTH, nearplane, farplane)
 
 def shader2D(vertexBuffer, texBuffer, texture):
     
     return ctx.pipeline(
         vertex_shader="""
-            #version 300 es
+            #version 330 core
             precision highp float;
             
             layout(location = 0) in vec2 vpos;
@@ -232,7 +237,7 @@ def shader2D(vertexBuffer, texBuffer, texture):
             }
         """,
         fragment_shader="""
-            #version 300 es
+            #version 330 core
             precision highp float;
             
             in vec2 TexCoords;
@@ -266,7 +271,7 @@ def shader2Danitex(vertexBuffer, texBuffer, texture, frameAmount):
     
     return ctx.pipeline(
         vertex_shader="""
-            #version 300 es
+            #version 330 core
             precision highp float;
             
             layout(location = 0) in vec2 vpos;
@@ -282,7 +287,7 @@ def shader2Danitex(vertexBuffer, texBuffer, texture, frameAmount):
             }
         """,
         fragment_shader="""
-            #version 300 es
+            #version 330 core
             precision highp float;
             
             in vec2 TexCoords;
@@ -315,7 +320,7 @@ def shader3D(vertexBuffer, normBuffer, texBuffer, texture):
     
     return ctx.pipeline(
         vertex_shader="""
-            #version 300 es
+            #version 330 core
             precision highp float;
             
             layout(location = 0) in vec3 vpos;
@@ -323,44 +328,44 @@ def shader3D(vertexBuffer, normBuffer, texBuffer, texture):
             layout(location = 2) in vec2 vtex;
             
             uniform mat4 projection;
-            uniform mat4 LSMvm[5];
+            uniform mat4 LSMvm[6];
             
             out vec2 TexCoords;
             out vec3 fragPos;
             out vec3 fragNorm;
-            out vec4 lightSpace[3];
+            out vec4 lightSpace[4];
             out float viewPosZ;
             
             void main()
             {
-                vec4 vertPos = LSMvm[4] * vec4(vpos, 1.0);
+                vec4 vertPos = LSMvm[5] * vec4(vpos, 1.0);
                 
                 TexCoords = vtex;
                 fragPos = vertPos.xyz;
-                fragNorm = (LSMvm[4] * vec4(vnorm, 0)).xyz;
+                fragNorm = (LSMvm[5] * vec4(vnorm, 0)).xyz;
 
-                for (int i = 0; i < 3; i++) {
+                for (int i = 0; i < 4; i++) {
                     lightSpace[i] = LSMvm[i] * vertPos;
                 }
 
-                vec4 viewPos = LSMvm[3] * vertPos;
+                vec4 viewPos = LSMvm[4] * vertPos;
                 viewPosZ = viewPos.z;
                 gl_Position = projection * viewPos;
             }
         """,
         fragment_shader="""
-            #version 300 es
+            #version 330 core
             precision highp float;
             
             in vec2 TexCoords;
             in vec3 fragPos;
             in vec3 fragNorm;
-            in vec4 lightSpace[3];
+            in vec4 lightSpace[4];
             in float viewPosZ;
 
             uniform sampler2D material;
-            uniform highp sampler2DArray lightdepth;
-            uniform float cascadeClip[3];
+            uniform highp sampler2D lightdepth;
+            uniform float cascadeClip[4];
             uniform vec3 camPos;
             uniform vec3 lightposition[1];
             uniform vec3 lightcolor[1];
@@ -370,8 +375,8 @@ def shader3D(vertexBuffer, normBuffer, texBuffer, texture):
             
             float ShadowCalculation()
             {
-                int cascadeIndex = 2;
-                for (int i = 0 ; i < 2 ; i++)
+                int cascadeIndex = 3;
+                for (int i = 0 ; i < 3 ; i++)
                 {
                     if (-viewPosZ <= cascadeClip[i])
                     {
@@ -385,7 +390,7 @@ def shader3D(vertexBuffer, normBuffer, texBuffer, texture):
                 projCoords = projCoords * 0.5 + 0.5;
 
                 int shadow = 0;
-                vec2 texelSize = 1.0 / vec2(textureSize(lightdepth, cascadeIndex));
+                vec2 texelSize = 1.0 / vec2(textureSize(lightdepth, 0));
                 for (int x = -1; x <= 1; ++x)
                 {
                     for (int y = -1; y <= 1; ++y)
@@ -393,9 +398,9 @@ def shader3D(vertexBuffer, normBuffer, texBuffer, texture):
                         vec2 local = projCoords.xy + vec2(x, y) * texelSize;
                         shadow += any(lessThan(vec2(0.5), abs(local - 0.5))) ? 1 : 0;
 
-                        float pcfDepth = texture(lightdepth, vec3(local, cascadeIndex)).r; 
-                        shadow += pcfDepth > projCoords.z ? 1 : 0;
-                    }    
+                        float pcfDepth = 1 - texture(lightdepth, local)[cascadeIndex]; 
+                        shadow += (pcfDepth + 0.00005) > projCoords.z ? 1 : 0;
+                    }
                 }
 
                 return min(float(shadow)/9.0, 1.0);
@@ -435,8 +440,8 @@ def shader3D(vertexBuffer, normBuffer, texBuffer, texture):
         """,
         
         uniforms={'projection': projection.flatten(),
-                  'LSMvm': [np.identity(4).flatten(), np.identity(4).flatten(), np.identity(4).flatten(), np.identity(4).flatten(), np.identity(4).flatten()],
-                  'cascadeClip': depthlayers[1:4],
+                  'LSMvm': [np.identity(4).flatten(), np.identity(4).flatten(), np.identity(4).flatten(), np.identity(4).flatten(), np.identity(4).flatten(), np.identity(4).flatten()],
+                  'cascadeClip': depthlayers[1:5],
                   'camPos' : [0,0,0],
                   'lightposition': [[0, 1000, 0]],
                   'lightcolor': [[255,255,255]],
@@ -461,7 +466,7 @@ def shader3Danimated(vertexBuffer, normBuffer, texBuffer, jointDataList, weightD
     
     return ctx.pipeline(
         vertex_shader="""
-            #version 300 es
+            #version 330 core
             precision highp float;
             
             layout(location = 0) in vec3 vpos;
@@ -471,13 +476,13 @@ def shader3Danimated(vertexBuffer, normBuffer, texBuffer, jointDataList, weightD
             layout(location = 4) in vec4 vweights;
             
             uniform mat4 projection;
-            uniform mat4 LSMvm[5];
+            uniform mat4 LSMvm[6];
             uniform mat4 animation[50];
             
             out vec2 TexCoords;
             out vec3 fragPos;
             out vec3 fragNorm;
-            out vec4 lightSpace[3];
+            out vec4 lightSpace[4];
             out float viewPosZ;
             
             vec4 applyBone(vec4 p)
@@ -501,34 +506,34 @@ def shader3Danimated(vertexBuffer, normBuffer, texBuffer, jointDataList, weightD
                 vec4 position = applyBone(vec4(vpos, 1.0));
                 vec4 normal = normalize(applyBone(vec4(vnorm, 0.0)));
                 
-                vec4 vertPos = LSMvm[4] * position;
+                vec4 vertPos = LSMvm[5] * position;
                 
                 TexCoords = vtex;
                 fragPos = vertPos.xyz;
                 fragNorm = (LSMvm[4] * normal).xyz;
 
-                for (int i = 0; i < 3; i++) {
+                for (int i = 0; i < 4; i++) {
                     lightSpace[i] = LSMvm[i] * vertPos;
                 }
 
-                vec4 viewPos = LSMvm[3] * vertPos;
+                vec4 viewPos = LSMvm[4] * vertPos;
                 viewPosZ = viewPos.z;
                 gl_Position = projection * viewPos;
             }
         """,
         fragment_shader="""
-            #version 300 es
+            #version 330 core
             precision highp float;
             
             in vec2 TexCoords;
             in vec3 fragPos;
             in vec3 fragNorm;
-            in vec4 lightSpace[3];
+            in vec4 lightSpace[4];
             in float viewPosZ;
 
             uniform sampler2D material;
-            uniform highp sampler2DArray lightdepth;
-            uniform float cascadeClip[3];
+            uniform highp sampler2D lightdepth;
+            uniform float cascadeClip[4];
             uniform vec3 camPos;
             uniform vec3 lightposition[1];
             uniform vec3 lightcolor[1];
@@ -538,8 +543,8 @@ def shader3Danimated(vertexBuffer, normBuffer, texBuffer, jointDataList, weightD
             
             float ShadowCalculation()
             {
-                int cascadeIndex = 2;
-                for (int i = 0 ; i < 2 ; i++)
+                int cascadeIndex = 3;
+                for (int i = 0 ; i < 3 ; i++)
                 {
                     if (-viewPosZ <= cascadeClip[i])
                     {
@@ -553,7 +558,7 @@ def shader3Danimated(vertexBuffer, normBuffer, texBuffer, jointDataList, weightD
                 projCoords = projCoords * 0.5 + 0.5;
 
                 int shadow = 0;
-                vec2 texelSize = 1.0 / vec2(textureSize(lightdepth, cascadeIndex));
+                vec2 texelSize = 1.0 / vec2(textureSize(lightdepth, 0));
                 for (int x = -1; x <= 1; ++x)
                 {
                     for (int y = -1; y <= 1; ++y)
@@ -561,8 +566,8 @@ def shader3Danimated(vertexBuffer, normBuffer, texBuffer, jointDataList, weightD
                         vec2 local = projCoords.xy + vec2(x, y) * texelSize;
                         shadow += any(lessThan(vec2(0.5), abs(local - 0.5))) ? 1 : 0;
 
-                        float pcfDepth = texture(lightdepth, vec3(local, cascadeIndex)).r; 
-                        shadow += pcfDepth > projCoords.z ? 1 : 0;
+                        float pcfDepth = 1 - texture(lightdepth, local)[cascadeIndex]; 
+                        shadow += (pcfDepth + 0.00005) > projCoords.z ? 1 : 0;
                     }    
                 }
 
@@ -603,7 +608,8 @@ def shader3Danimated(vertexBuffer, normBuffer, texBuffer, jointDataList, weightD
         """,
         
         uniforms={'projection': projection.flatten(),
-                  'LSMvm': [np.identity(4).flatten(), np.identity(4).flatten(), np.identity(4).flatten(), np.identity(4).flatten(), np.identity(4).flatten()],
+                  'LSMvm': [np.identity(4).flatten(), np.identity(4).flatten(), np.identity(4).flatten(), np.identity(4).flatten(), np.identity(4).flatten(), np.identity(4).flatten()],
+                  'cascadeClip': depthlayers[1:5],
                   'animation': [np.identity(4) for i in range(nrJoints)],
                   'camPos': [0,0,0],
                   'lightposition': [[0, 1000, 0]],
@@ -630,7 +636,7 @@ def shaderBoundingBox():
     
     return ctx.pipeline(
         vertex_shader="""
-            #version 300 es
+            #version 330 core
             precision highp float;
             
             layout (location = 0) in int vert;
@@ -645,7 +651,7 @@ def shaderBoundingBox():
             }
         """,
         fragment_shader="""
-            #version 300 es
+            #version 330 core
             precision highp float;
             
             layout (location = 0) out vec4 out_color;
@@ -666,58 +672,69 @@ def shaderBoundingBox():
     )
 def shaderDepth(vertexBuffer):
 
-    return [ctx.pipeline(
+    return ctx.pipeline(
         vertex_shader="""
-            #version 300 es
+            #version 330 core
+            #extension GL_AMD_vertex_shader_layer : enable
             precision highp float;
             
             layout(location = 0) in vec3 vpos;
             
-            uniform mat4 LSMm[2];
+            uniform mat4 LSMm[5];
+
+            flat out int instanceID;
 
             void main()
             {
-                gl_Position = LSMm[0] * LSMm[1] * vec4(vpos, 1);
+                gl_Position = LSMm[gl_InstanceID] * LSMm[4] * vec4(vpos, 1);
+                instanceID = gl_InstanceID;
             }
         """,
         fragment_shader="""
-            #version 300 es
+            #version 330 core
             precision highp float;
+
+            flat in int instanceID;
+
+            layout (location = 0) out vec4 colour;
 
             void main()
             {
+                colour[instanceID] = 1.0 - gl_FragCoord.z;
             }
         """,
         
-        uniforms={'LSMm': [np.identity(4).flatten(), np.identity(4).flatten()]},
-        
-        blend={'enable': True, 'src_color': 'src_alpha', 'dst_color': 'one_minus_src_alpha'},
+        uniforms={'LSMm': [np.identity(4).flatten(), np.identity(4).flatten(), np.identity(4).flatten(), np.identity(4).flatten(), np.identity(4).flatten()]},
+
+        blend={'enable': True, 'src_color': 'src_alpha', 'dst_color': 'one_minus_src_alpha', 'op_color': 'max', 'op_alpha' : 'max'},
+
         vertex_buffers= zengl.bind(ctx.buffer(vertexBuffer), "3f", 0),
         
         vertex_count= len(vertexBuffer),
-        topology= "triangles",
         cull_face= "front",
-        framebuffer= [lightdepth.face(cascadeIndex)]
-    ) for cascadeIndex in range(3)]
-def shaderTerrain(vertexBuffer, normBuffer, depthmap, texture):
+        instance_count= 4,
+        topology= "triangles",
+        framebuffer= [lightdepth]
+    )
+def shaderTerrain(vertexBuffer, normmap, depthmap, texture):
     
     return ctx.pipeline(
         vertex_shader="""
-            #version 300 es
+            #version 330 core
             precision highp float;
             
             layout(location = 0) in vec3 vpos;
-            layout(location = 1) in vec3 vnorm;
 
             uniform mat4 projection;
-            uniform mat4 LSMv[4];
+            uniform mat4 LSMv[5];
+            uniform sampler2D normmap;
             uniform sampler2D heightmap;
             uniform vec2 ofset;
 
             out vec2 TexCoords;
             out vec3 fragPos;
             out vec3 fragNorm;
-            out vec4 lightSpace[3];
+            out vec4 lightSpace[4];
             out float viewPosZ;
 
             void main()
@@ -727,30 +744,30 @@ def shaderTerrain(vertexBuffer, normBuffer, depthmap, texture):
                 float height = (rawHeight.x/256.0 + rawHeight.y) * (31875.0/32.0);
 
                 fragPos = vpos + vec3(ofset.x, height, ofset.y);
-                fragNorm = vnorm;
+                fragNorm = normalize(texture(normmap, TexCoords).rbg * 2.0 - 1.0);
 
-                for (int i = 0; i < 3; i++) {
+                for (int i = 0; i < 4; i++) {
                     lightSpace[i] = LSMv[i] * vec4(fragPos, 1);
                 }
 
-                vec4 viewPos = LSMv[3] * vec4(fragPos, 1);
+                vec4 viewPos = LSMv[4] * vec4(fragPos, 1);
                 viewPosZ = viewPos.z;
                 gl_Position = projection * viewPos;
             }
         """,
         fragment_shader="""
-            #version 300 es
+            #version 330 core
             precision highp float;
             
             in vec2 TexCoords;
             in vec3 fragPos;
             in vec3 fragNorm;
-            in vec4 lightSpace[3];
+            in vec4 lightSpace[4];
             in float viewPosZ;
 
             uniform sampler2D material;
-            uniform highp sampler2DArray lightdepth;
-            uniform float cascadeClip[3];
+            uniform highp sampler2D lightdepth;
+            uniform float cascadeClip[4];
             uniform vec3 camPos;
             uniform vec3 lightposition[1];
             uniform vec3 lightcolor[1];
@@ -760,8 +777,8 @@ def shaderTerrain(vertexBuffer, normBuffer, depthmap, texture):
             
             float ShadowCalculation()
             {
-                int cascadeIndex = 2;
-                for (int i = 0 ; i < 2 ; i++)
+                int cascadeIndex = 3;
+                for (int i = 0 ; i < 3 ; i++)
                 {
                     if (-viewPosZ <= cascadeClip[i])
                     {
@@ -775,7 +792,7 @@ def shaderTerrain(vertexBuffer, normBuffer, depthmap, texture):
                 projCoords = projCoords * 0.5 + 0.5;
 
                 int shadow = 0;
-                vec2 texelSize = 1.0 / vec2(textureSize(lightdepth, cascadeIndex));
+                vec2 texelSize = 1.0 / vec2(textureSize(lightdepth, 0));
                 for (int x = -1; x <= 1; ++x)
                 {
                     for (int y = -1; y <= 1; ++y)
@@ -783,9 +800,9 @@ def shaderTerrain(vertexBuffer, normBuffer, depthmap, texture):
                         vec2 local = projCoords.xy + vec2(x, y) * texelSize;
                         shadow += any(lessThan(vec2(0.5), abs(local - 0.5))) ? 1 : 0;
 
-                        float pcfDepth = texture(lightdepth, vec3(local, cascadeIndex)).r; 
-                        shadow += pcfDepth > projCoords.z ? 1 : 0;
-                    }    
+                        float pcfDepth = 1 - texture(lightdepth, local)[cascadeIndex]; 
+                        shadow += (pcfDepth + 0.00005) > projCoords.z ? 1 : 0;
+                    }
                 }
 
                 return min(float(shadow)/9.0, 1.0);
@@ -826,22 +843,24 @@ def shaderTerrain(vertexBuffer, normBuffer, depthmap, texture):
         
         uniforms={'projection': projection.flatten(),
                   'ofset': [0, 0],
-                  'LSMv': [np.identity(4).flatten(), np.identity(4).flatten(), np.identity(4).flatten(), np.identity(4).flatten()],
+                  'LSMv': [np.identity(4).flatten(), np.identity(4).flatten(), np.identity(4).flatten(), np.identity(4).flatten(), np.identity(4).flatten()],
+                  'cascadeClip': depthlayers[1:5],
                   'camPos' : [0,0,0],
                   'lightposition': [[0, 1000, 0]],
                   'lightcolor': [[255,255,255]],
                   'lightstrength': [500]},
         
         blend={'enable': True, 'src_color': 'src_alpha', 'dst_color': 'one_minus_src_alpha'},
-        layout=[{'name': 'heightmap', 'binding': 0},
-                {'name': 'material', 'binding': 1},
-                {'name': 'lightdepth', 'binding': 2}],
-        resources=[{'type': 'sampler', 'binding': 0, 'image': depthmap, 'wrap_x': 'clamp_to_edge', 'wrap_y': 'clamp_to_edge', 'min_filter': 'nearest', 'mag_filter': 'nearest'},
-                   {'type': 'sampler', 'binding': 1, 'image': texture, 'wrap_x': 'repeat', 'wrap_y': 'repeat', 'min_filter': 'nearest', 'mag_filter': 'nearest'},
-                   {'type': 'sampler', 'binding': 2, 'image': lightdepth, 'wrap_x': 'clamp_to_edge', 'wrap_y': 'clamp_to_edge', 'min_filter': 'nearest', 'mag_filter': 'nearest'}],
+        layout=[{'name': 'normmap', 'binding': 0},
+                {'name': 'heightmap', 'binding': 1},
+                {'name': 'material', 'binding': 2},
+                {'name': 'lightdepth', 'binding': 3}],
+        resources=[{'type': 'sampler', 'binding': 0, 'image': normmap, 'wrap_x': 'clamp_to_edge', 'wrap_y': 'clamp_to_edge', 'min_filter': 'nearest', 'mag_filter': 'nearest'},
+                   {'type': 'sampler', 'binding': 1, 'image': depthmap, 'wrap_x': 'clamp_to_edge', 'wrap_y': 'clamp_to_edge', 'min_filter': 'nearest', 'mag_filter': 'nearest'},
+                   {'type': 'sampler', 'binding': 2, 'image': texture, 'wrap_x': 'repeat', 'wrap_y': 'repeat', 'min_filter': 'nearest', 'mag_filter': 'nearest'},
+                   {'type': 'sampler', 'binding': 3, 'image': lightdepth, 'wrap_x': 'clamp_to_edge', 'wrap_y': 'clamp_to_edge', 'min_filter': 'nearest', 'mag_filter': 'nearest'}],
         
-        vertex_buffers= [*zengl.bind(ctx.buffer(vertexBuffer), "3f", 0),
-                         *zengl.bind(ctx.buffer(normBuffer), "3f", 1)],
+        vertex_buffers= zengl.bind(ctx.buffer(vertexBuffer), "3f", 0),
         
         vertex_count= len(vertexBuffer),
         cull_face= "back",
@@ -850,16 +869,19 @@ def shaderTerrain(vertexBuffer, normBuffer, depthmap, texture):
         )
 def shaderTerrainDepth(vertexBuffer, depthmap):
 
-    return [ctx.pipeline(
+    return ctx.pipeline(
         vertex_shader="""
-            #version 300 es
+            #version 330 core
+            #extension GL_AMD_vertex_shader_layer : enable
             precision highp float;
             
             layout(location = 0) in vec3 vpos;
             
-            uniform mat4 LSMm[2];
+            uniform mat4 LSMm[5];
             uniform sampler2D heightmap;
             uniform vec2 ofset;
+
+            flat out int instanceID;
 
             void main()
             {
@@ -868,31 +890,40 @@ def shaderTerrainDepth(vertexBuffer, depthmap):
                 float height = (rawHeight.x/256.0 + rawHeight.y) * (31875.0/32.0);
 
                 vec3 pos = vpos + vec3(ofset.x, height, ofset.y);
-                gl_Position = LSMm[0] * LSMm[1] * vec4(pos, 1);
+                gl_Position = LSMm[gl_InstanceID] * LSMm[4] * vec4(pos, 1);
+                instanceID = gl_InstanceID;
             }
         """,
         fragment_shader="""
-            #version 300 es
+            #version 330 core
             precision highp float;
+
+            flat in int instanceID;
+
+            layout (location = 0) out vec4 colour;
 
             void main()
             {
+                colour[instanceID] = 1.0 - gl_FragCoord.z;
             }
         """,
         
-        uniforms={'LSMm': [np.identity(4).flatten(), np.identity(4).flatten()],
+        uniforms={'LSMm': [np.identity(4).flatten(), np.identity(4).flatten(), np.identity(4).flatten(), np.identity(4).flatten(), np.identity(4).flatten()],
                   'ofset': [0, 0]},
         
-        blend= {'enable': True, 'src_color': 'src_alpha', 'dst_color': 'one_minus_src_alpha'},
         layout= [{'name': 'heightmap', 'binding': 0}],
         resources= [{'type': 'sampler', 'binding': 0, 'image': depthmap, 'wrap_x': 'clamp_to_edge', 'wrap_y': 'clamp_to_edge', 'min_filter': 'nearest', 'mag_filter': 'nearest'}],
+
+        blend={'enable': True, 'src_color': 'src_alpha', 'dst_color': 'one_minus_src_alpha', 'op_color': 'max', 'op_alpha' : 'max'},
+
         vertex_buffers= zengl.bind(ctx.buffer(vertexBuffer), "3f", 0),
         
         vertex_count= len(vertexBuffer),
-        topology= "triangles",
         cull_face= "front",
-        framebuffer= [lightdepth.face(cascadeIndex)]
-    ) for cascadeIndex in range(3)]
+        instance_count= 4,
+        topology= "triangles",
+        framebuffer= [lightdepth]
+    )
 
 #####################################################################################
 
@@ -1013,8 +1044,8 @@ class scene:
         
         if sceneNr == 0:
             
-            self.light = pointLight([-1000, 820, -1000], [-1/3*np.pi, -1/12*np.pi, 0], [218, 203, 125], 5000)
-            self.terrain = gltfMesh("models/terrain/terrain.gltf", [material("gfx/map8.png"), material("gfx/grass.png")])
+            self.light = pointLight([-2000, 2000, -2000], [-1/3*np.pi, -1/10*np.pi, 0], [218, 203, 125], 10000)
+            self.terrain = gltfMesh("models/terrain/terrain.gltf", [material("gfx/map8N.png"), self.heightmap, material("gfx/grass.png")])
 
             self.terrain.shaders.uniforms['ofset'][:] = np.ascontiguousarray(np.round(self.player.position[0:3:2] / 5) * 5, 'f').data.cast('B')
             
@@ -1131,7 +1162,10 @@ class scene:
     
     def movePlayer(self, dPos, sprint, frametime):
         
-        movement = normalize((dPos[0]*self.player.right + dPos[1]*self.player.forwards)) * (1 + sprint)
+        if dPos[0] and dPos[1]:
+            dPos *= 0.7071
+        
+        movement = (dPos[0]*self.player.right + dPos[1]*self.player.forwards) * (1 + sprint)
         movement, collisionHeight = self.checkCollision(movement, self.player.position)
         
         self.player.angle(frametime, dPos)
@@ -1140,8 +1174,7 @@ class scene:
 
         pos = self.player.position[0:3:2]
         self.terrain.shaders.uniforms['ofset'][:] = np.ascontiguousarray([np.round(pos / 5) * 5], 'f').data.cast('B')
-        for cascade in self.terrain.depth[0]:
-            cascade.uniforms['ofset'][:] = np.ascontiguousarray([np.round(pos / 5) * 5], 'f').data.cast('B')
+        self.terrain.depth[0].uniforms['ofset'][:] = np.ascontiguousarray([np.round(pos / 5) * 5], 'f').data.cast('B')
         
         pos = [int(i * 5/2 + 2500) for i in pos]
 
@@ -1248,7 +1281,7 @@ class scene:
         view = cam.getViewTransform()
         frustum = cam.frustum
 
-        lightSpaceMatrix = [self.makeLightProjection(view, depthlayers[i], depthlayers[i+1]) for i in range(3)]
+        lightSpaceMatrix = [self.makeLightProjection(view, depthlayers[i], depthlayers[i+1]) for i in range(4)]
         
         [self.drawDepth(entity_type, entity, lightSpaceMatrix) for entity_type, entity in self.entities.items()]
         self.terrain.drawDepth(np.identity(4), lightSpaceMatrix)
@@ -1267,29 +1300,21 @@ class scene:
         invProjView = np.linalg.inv(view @ proj)
 
         frustumcorners = self.preFrustum @ invProjView
-        frustumcorners = np.array([pt / pt[3] for pt in frustumcorners])
+        frustumcorners /= frustumcorners[:,3:None]
 
         center = sum(frustumcorners)/8
         lightview = get_view(self.lightforwards, self.lightup, self.lightright, center[0:3])
 
         viewcorners = frustumcorners @ lightview
 
-        cornerX = [*viewcorners[:, 0]]
-        cornerY = [*viewcorners[:, 1]]
-        cornerZ = [*viewcorners[:, 2]]
+        minX, minY, minZ = np.amin(viewcorners, axis= 0)[0:3]
+        maxX, maxY, maxZ = np.amax(viewcorners, axis= 0)[0:3]
 
-        minX = min(cornerX)
-        maxX = max(cornerX)
-        minY = min(cornerY)
-        maxY = max(cornerY)
-        minZ = min(cornerZ)
-        maxZ = max(cornerZ)
+        if minZ < 0: minZ *= 10
+        else: minZ *= 0.1
 
-        if minZ < 0: minZ *= 2
-        else: minZ *= 0.5
-
-        if maxZ < 0: maxZ *= 0.5
-        else: maxZ *= 2
+        if maxZ < 0: maxZ *= 0.1
+        else: maxZ *= 10
 
         lightProjection = create_orthogonal_projection(minX, maxX, minY, maxY, -maxZ, -minZ)
         lightSpaceMatrix = lightview @ lightProjection
@@ -1366,7 +1391,7 @@ class game:
 
     def handle_keys(self):
 
-        dPos = [0,0]
+        dPos = np.zeros(2)
         keys = pygame.key.get_pressed()
 
         #this method makes it so holding multible keys doesnt prioritize the first one in the row
@@ -1609,13 +1634,13 @@ class gltfMesh:
             self.shaders = [shader3Danimated(vertexDataList[i], normalDataList[i], texCoordDataList[i], jointDataList[i], weightDataList[i], self.nrJoints, textures[i].img) for i in range(listLenght)]
 
         elif filename == "models/terrain/terrain.gltf":
-            self.shaders = shaderTerrain(vertexDataList[0], normalDataList[0], textures[0].img, textures[1].img)
+            self.shaders = shaderTerrain(vertexDataList[0], textures[0].img, textures[1].img, textures[2].img)
         
         else:
             self.shaders = [shader3D(vertexDataList[i], normalDataList[i], texCoordDataList[i], textures[i].img) for i in range(listLenght)]
         
         if filename == "models/terrain/terrain.gltf":
-            self.depth = [shaderTerrainDepth(vertexDataList[0], textures[0].img)]
+            self.depth = [shaderTerrainDepth(vertexDataList[0], textures[1].img)]
         else:
             self.depth = [shaderDepth(vertexDataList[i]) for i in range(listLenght)]
     
@@ -1636,10 +1661,8 @@ class gltfMesh:
     def drawDepth(self, model, lightSpaceMatrix):
 
         for depth in self.depth:
-            for i in range(3):
-                cascade = depth[i]
-                cascade.uniforms['LSMm'][:] = np.ascontiguousarray([lightSpaceMatrix[i], model], 'f').data.cast('B')
-                cascade.render()
+            depth.uniforms['LSMm'][:] = np.ascontiguousarray([*lightSpaceMatrix, model], 'f').data.cast('B')
+            depth.render()
     
     def drawTerrain(self, view, lightSpaceMatrix, lightpos):
 
