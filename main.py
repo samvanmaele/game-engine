@@ -181,17 +181,17 @@ def create_from_scale(scale, dtype=None):
     return m
 def ray_intersect_aabb(ray, aabb):
     
-    direction = ray[1]
+    direction = ray
     dir_fraction = np.empty(3, dtype = ray.dtype)
     dir_fraction[direction == 0.0] = np.inf
     dir_fraction[direction != 0.0] = np.divide(1.0, direction[direction != 0.0])
 
-    t1 = (aabb[0,0] - ray[0,0]) * dir_fraction[ 0 ]
-    t2 = (aabb[1,0] - ray[0,0]) * dir_fraction[ 0 ]
-    t3 = (aabb[0,1] - ray[0,1]) * dir_fraction[ 1 ]
-    t4 = (aabb[1,1] - ray[0,1]) * dir_fraction[ 1 ]
-    t5 = (aabb[0,2] - ray[0,2]) * dir_fraction[ 2 ]
-    t6 = (aabb[1,2] - ray[0,2]) * dir_fraction[ 2 ]
+    t1 = (aabb[0,0]) * dir_fraction[ 0 ]
+    t2 = (aabb[1,0]) * dir_fraction[ 0 ]
+    t3 = (aabb[0,1]) * dir_fraction[ 1 ]
+    t4 = (aabb[1,1]) * dir_fraction[ 1 ]
+    t5 = (aabb[0,2]) * dir_fraction[ 2 ]
+    t6 = (aabb[1,2]) * dir_fraction[ 2 ]
 
 
     tmin = max(min(t1, t2), min(t3, t4), min(t5, t6))
@@ -210,7 +210,7 @@ def ray_intersect_aabb(ray, aabb):
     # to intersection
 
     t = min(x for x in [tmin, tmax] if x >= 0)
-    point = ray[0] + (ray[1] * t)
+    point = (ray * t)
     return point
 def get_view(forwards, up, right, position):
 
@@ -1056,8 +1056,8 @@ class scene:
         if sceneNr == 0:
             
             self.light = pointLight([-2000, 2000, -2000], [-1/3*np.pi, -1/10*np.pi, 0], [218, 203, 125], 10000)
-            self.terrain = gltfMesh("models/terrain/terrain.gltf", [material("gfx/map8N.png"), self.heightmap, material("gfx/grass.png")])
 
+            self.terrain = gltfMesh("models/terrain/terrain.gltf", [material("gfx/map8N.png"), self.heightmap, material("gfx/grass.png")])
             self.terrain.shaders.uniforms['ofset'][:] = np.ascontiguousarray(np.round(self.player.position[0:3:2] / 5) * 5, 'f').data.cast('B')
             
             self.entities = {
@@ -1116,10 +1116,13 @@ class scene:
                                                                                                                                                  material("models/V-nexus/vedal's_house/vedals_house.png"),
                                                                                                                                                  material("models/V-nexus/vedal's_house/vedals_house.png"),
                                                                                                                                                  material("models/V-nexus/vedal's_house/vedals_house.png")])],
-                ENTITY_TYPE["bounding_box"]:      [entity([0,0,0],999),            boundingBoxMesh(                                              )]
                 }
         
+        self.lightProj = [np.linalg.inv(create_perspective_projection_from_bounds(-depthlayers[i], depthlayers[i], -depthlayers[i], depthlayers[i], depthlayers[i], depthlayers[i+1])) for i in range(4)]
         self.preFrustum = [[-1,-1,-1,1], [-1,-1,1,1], [-1,1,-1,1], [-1,1,1,1], [1,-1,-1,1], [1,-1,1,1], [1,1,-1,1], [1,1,1,1]]
+        self.identity = np.identity(4)
+
+        self.boundingbox = boundingBoxMesh()
 
         cosX = np.cos(self.light.eulers[0])
         sinX = np.sin(self.light.eulers[0])
@@ -1221,8 +1224,7 @@ class scene:
                 
                 if localBoundingBox[1][1] < 0.4: continue
                 
-                moveRay = np.array(((0,0,0), movement), dtype=np.float32)
-                collisionPos = ray_intersect_aabb(moveRay, localBoundingBox)
+                collisionPos = ray_intersect_aabb(movement, localBoundingBox)
                 if collisionPos is not None:
                     
                     distance = np.linalg.norm(collisionPos)
@@ -1241,7 +1243,7 @@ class scene:
             index = distanceList.index(min(distanceList))
             movement = collisionPosList[index]
             movement += self.checkCollision2(movementList[index], meshBoundingBoxList-pos+movement)
-            self.entities[ENTITY_TYPE["bounding_box"]][1].updateBoundingBox(meshBoundingBoxList[index])
+            self.boundingbox.updateBoundingBox(meshBoundingBoxList[index])
         
         if heightList:
             collisionHeight = pos[1] + max(heightList)
@@ -1254,8 +1256,7 @@ class scene:
         
         for meshBoundingBox in meshBoundingBoxList:
             
-            moveRay = np.array(((0,0,0), movement), dtype=np.float32)
-            collisionPos = ray_intersect_aabb(moveRay, meshBoundingBox)
+            collisionPos = ray_intersect_aabb(movement, meshBoundingBox)
             if collisionPos is not None:
                 
                 distanceList.append(np.linalg.norm(collisionPos))
@@ -1292,32 +1293,46 @@ class scene:
         view = cam.getViewTransform()
         frustum = cam.frustum
 
-        lightSpaceMatrix = [self.makeLightProjection(view, depthlayers[i], depthlayers[i+1]) for i in range(4)]
+        lightSpaceMatrix = [self.makeLightProjection(view, self.lightProj[i]) for i in range(4)]
+        terrain = self.terrain
         
-        [self.drawDepth(entity_type, entity, lightSpaceMatrix) for entity_type, entity in self.entities.items()]
-        self.terrain.drawDepth(np.identity(4), lightSpaceMatrix)
+        for entity_type, entity in self.entities.items():
+            self.drawDepth(entity_type, entity, lightSpaceMatrix)
+        terrain.drawDepth(np.identity(4), lightSpaceMatrix)
 
-        [self.draw(entity, lightSpaceMatrix, frustum, view, cam.position, self.light.position) for entity in self.entities.values()]
-        self.terrain.drawTerrain(view, lightSpaceMatrix, self.light.position)
+        lightpos = self.light.position
+        campos = cam.position
+        for entity in self.entities.values():
+            self.draw(entity, lightSpaceMatrix, frustum, view, campos, lightpos)
+        terrain.drawTerrain(view, lightSpaceMatrix, lightpos)
+
+        self.boundingbox.draw(view, entity[0].transformMat, lightSpaceMatrix, campos, self.light.position)
         
         image.blit(output)
         output.blit()
         ctx.end_frame()
         pygame.display.flip()
-    
-    def makeLightProjection(self, view, nearplane, farplane):
 
-        proj = create_perspective_projection_from_bounds(-nearplane, nearplane, -nearplane, nearplane, nearplane, farplane)
-        invProjView = np.linalg.inv(view @ proj)
+    def makeLightProjection(self, view, proj):
+
+        transView = view[0:3,0:3].T
+        transTrans = view[3,0:3] @ transView
+
+        invView = self.identity.copy()
+        invView[0:3,0:3] = transView
+        invView[3,0:3] = -transTrans
+
+        invProjView = proj @ invView
 
         frustumcorners = self.preFrustum @ invProjView
+
         frustumcorners /= frustumcorners[:,3:None]
 
-        center = sum(frustumcorners)/8
+        center = sum(frustumcorners) * 0.125
+
         lightview = get_view(self.lightforwards, self.lightup, self.lightright, center[0:3])
-
+        
         viewcorners = frustumcorners @ lightview
-
         minX, minY, minZ = np.amin(viewcorners, axis= 0)[0:3]
         maxX, maxY, maxZ = np.amax(viewcorners, axis= 0)[0:3]
 
@@ -1339,14 +1354,24 @@ class scene:
     
     def draw(self, entity, lightSpaceMatrix, frustum, view, campos, lightpos):
         
-        frustumtest = [(normal[0] * entity[0].position[0] + normal[1] * entity[0].position[1] + normal[2] * entity[0].position[2]) - dis + entity[0].size > 0 for normal, dis in frustum]
-        if all(frustumtest):
+        if self.insideFrustum(entity[0], frustum):
             
             if entity[1].hasJoints:
                 entity[1].pose += 1
                 entity[1].setUniform()
             
             entity[1].draw(view, entity[0].transformMat, lightSpaceMatrix, campos, lightpos)
+    
+    def insideFrustum(self, ent, frustum):
+
+        px,py,pz = ent.position
+        s = ent.size
+
+        for (nx,ny,nz), d in frustum:
+            if nx*px + ny*py + nz*pz - d + s <= 0:
+                return 0
+        
+        return 1
 
 class game:
     
