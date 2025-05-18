@@ -4,7 +4,6 @@
 # dependencies = [
 #  "numpy",
 #  "pygame",
-#  "struct",
 #  "zengl",
 #  "marshmallow",
 #  "opencv-python"
@@ -90,7 +89,7 @@ ENTITY_TYPE = {"player": 0,
 
 #pyrr functions that i copied cuz import pyrr causes long load times in browsers
 
-def create_perspective_projection_from_bounds(left, right, bottom, top, near, far, dtype=None):
+def create_perspective_projection_from_bounds(left, right, bottom, top, near, far, dtype= np.float32):
     C = -(far + near) / (far - near)
     D = -2. * far * near / (far - near)
     E = 2. * near / (right - left)
@@ -99,9 +98,9 @@ def create_perspective_projection_from_bounds(left, right, bottom, top, near, fa
     return np.array(((E,  0., 0., 0.),
                      (0., F,  0., 0.),
                      (0., 0., C, -1.),
-                     (0., 0., D,  0.))
-    )
-def create_orthogonal_projection(left, right, bottom, top, near, far, dtype=None):
+                     (0., 0., D,  0.)),
+                     dtype= dtype)
+def create_orthogonal_projection(left, right, bottom, top, near, far, dtype= np.float32):
 
     rml = right - left
     tmb = top - bottom
@@ -114,12 +113,11 @@ def create_orthogonal_projection(left, right, bottom, top, near, far, dtype=None
     Ty = -(top + bottom) / tmb
     Tz = -(far + near) / fmn
 
-    return np.array((
-        ( A, 0., 0., 0.),
-        (0.,  B, 0., 0.),
-        (0., 0.,  C, 0.),
-        (Tx, Ty, Tz, 1.),
-    ), dtype=dtype)
+    return np.array((( A, 0., 0., 0.),
+                     (0.,  B, 0., 0.),
+                     (0., 0.,  C, 0.),
+                     (Tx, Ty, Tz, 1.),),
+                     dtype=dtype)
 def normalize(vec):
     
     return (vec.T  / np.sqrt(np.sum(vec**2,axis=-1))).T
@@ -135,7 +133,7 @@ def create_from_eulers(eulers):
     return np.array([[cY * cP, -cY * sP * cR + sY * sR, cY * sP * sR + sY * cR],
                      [sP, cP * cR, -cP * sR],
                      [-sY * cP, sY * sP * cR + cY * sR, -sY * sP * sR + cY * cR,]])
-def create_from_quaternion(quat, dtype=None):
+def create_from_quaternion(quat, dtype= np.float32):
     dtype = dtype
 
     qx, qy, qz, qw = quat[0], quat[1], quat[2], quat[3]
@@ -162,19 +160,17 @@ def create_from_quaternion(quat, dtype=None):
     m21 = 2.0 * (qyz + qxw) * invs
     m12 = 2.0 * (qyz - qxw) * invs
 
-    return np.array([
-        [m00, m01, m02, 0],
-        [m10, m11, m12, 0],
-        [m20, m21, m22, 0],
-        [0,   0,   0,   1]
-    ], dtype=dtype)
-def create_from_translation(vec, dtype=None):
+    return np.array([[m00, m01, m02, 0],
+                     [m10, m11, m12, 0],
+                     [m20, m21, m22, 0],
+                     [0,   0,   0,   1]],
+                     dtype=dtype)
+def create_from_translation(vec, dtype= np.float32):
     
-    dtype = dtype
     mat = np.identity(4, dtype=dtype)
     mat[3, 0:3] = vec[:3]
     return mat
-def create_from_scale(scale, dtype=None):
+def create_from_scale(scale, dtype= np.float32):
     m = np.diagflat([*scale, 1.0])
     if dtype:
         m = m.astype(dtype)
@@ -1120,7 +1116,7 @@ class scene:
         
         self.lightProj = [np.linalg.inv(create_perspective_projection_from_bounds(-depthlayers[i], depthlayers[i], -depthlayers[i], depthlayers[i], depthlayers[i], depthlayers[i+1])) for i in range(4)]
         self.preFrustum = [[-1,-1,-1,1], [-1,-1,1,1], [-1,1,-1,1], [-1,1,1,1], [1,-1,-1,1], [1,-1,1,1], [1,1,-1,1], [1,1,1,1]]
-        self.identity = np.identity(4)
+        self.identity = np.identity(4, dtype= np.float32)
 
         self.boundingbox = boundingBoxMesh()
 
@@ -1315,37 +1311,27 @@ class scene:
 
     def makeLightProjection(self, view, proj):
 
-        transView = view[0:3,0:3].T
-        transTrans = view[3,0:3] @ transView
+        transView = view[:3,:3].T
+        transTrans = view[3,:3] @ transView
 
         invView = self.identity.copy()
-        invView[0:3,0:3] = transView
-        invView[3,0:3] = -transTrans
+        invView[:3,:3] = transView
+        invView[3,:3] = -transTrans
 
-        invProjView = proj @ invView
-
-        frustumcorners = self.preFrustum @ invProjView
-
+        frustumcorners = self.preFrustum @ proj @ invView
         frustumcorners /= frustumcorners[:,3:None]
+        center = np.mean(frustumcorners, axis= 0)[0:3]
 
-        center = sum(frustumcorners) * 0.125
-
-        lightview = get_view(self.lightforwards, self.lightup, self.lightright, center[0:3])
-        
+        lightview = get_view(self.lightforwards, self.lightup, self.lightright, center)
         viewcorners = frustumcorners @ lightview
-        minX, minY, minZ = np.amin(viewcorners, axis= 0)[0:3]
-        maxX, maxY, maxZ = np.amax(viewcorners, axis= 0)[0:3]
+        minX, minY, minZ = viewcorners.min(axis=0)[0:3]
+        maxX, maxY, maxZ = viewcorners.max(axis=0)[0:3]
 
-        if minZ < 0: minZ *= 10
-        else: minZ *= 0.1
-
-        if maxZ < 0: maxZ *= 0.1
-        else: maxZ *= 10
+        minZ *= 10 if minZ < 0 else 0.1
+        maxZ *= 0.1 if maxZ < 0 else 10
 
         lightProjection = create_orthogonal_projection(minX, maxX, minY, maxY, -maxZ, -minZ)
-        lightSpaceMatrix = lightview @ lightProjection
-
-        return lightSpaceMatrix
+        return lightview @ lightProjection
 
     def drawDepth(self, entity_type, entity, lightSpaceMatrix):
 
@@ -1550,17 +1536,29 @@ class menu:
     
     def set_up_timer(self):
 
-        self.last_time = pygame.time.get_ticks()/1000
+        self.last_time = 0
+        self.time = 0
         self.frametime = 0
+        self.savedtime = 0
+        self.savedFramerate = 0
+        self.savedFrames = 0
     
     def calculate_framerate(self):
 
         self.time = time.perf_counter_ns() * 0.000001
         self.frametime = (self.time - self.last_time)
         framerate = 1000/self.frametime
-
-        pygame.display.set_caption(f"Running at {int(framerate)} fps.")
         self.last_time = self.time
+
+        self.savedFramerate += framerate
+        self.savedFrames += 1
+
+        if self.time - self.savedtime > 250:
+
+            pygame.display.set_caption(f"Running at {int(self.savedFramerate/self.savedFrames)} fps.")
+            self.savedtime = self.time
+            self.savedFramerate = 0
+            self.savedFrames = 0
     
     def quit(self):
         
@@ -1741,5 +1739,3 @@ async def main():
     myApp.quit()
 
 asyncio.run(main())
-
-#cProfile.run("asyncio.run(main())")
