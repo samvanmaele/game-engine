@@ -29,7 +29,7 @@ pygame.init()
 
 pygame.display.init()
 
-if sys.platform == "emscripten":
+if not sys.platform == "win32":
     pygame.display.gl_set_attribute(pygame.GL_CONTEXT_MAJOR_VERSION, 3)
     pygame.display.gl_set_attribute(pygame.GL_CONTEXT_MINOR_VERSION, 0)
     pygame.display.gl_set_attribute(pygame.GL_CONTEXT_PROFILE_MASK, pygame.GL_CONTEXT_PROFILE_ES)
