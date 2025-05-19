@@ -27,6 +27,14 @@ pygame.init()
 #audio1 = pygame.mixer.music.load("sfx/NeuroSama-Goddess.ogg")
 #pygame.mixer.music.play(-1)
 
+pygame.display.init()
+
+if sys.platform == "win32":
+    pygame.display.gl_set_attribute(pygame.GL_CONTEXT_MAJOR_VERSION, 3)
+    pygame.display.gl_set_attribute(pygame.GL_CONTEXT_MINOR_VERSION, 3)
+    pygame.display.gl_set_attribute(pygame.GL_CONTEXT_PROFILE_MASK, pygame.GL_CONTEXT_PROFILE_CORE)
+    pygame.display.gl_set_attribute(pygame.GL_CONTEXT_FORWARD_COMPATIBLE_FLAG, 1)
+
 screen = pygame.display.set_mode((WIDTH, HEIGHT), flags=pygame.OPENGL|pygame.DOUBLEBUF)
 clock = pygame.time.Clock()
 ctx = zengl.context()
@@ -34,7 +42,7 @@ ctx = zengl.context()
 size = pygame.display.get_window_size()
 image = ctx.image(size, 'rgba8unorm', samples= 4)
 depth = ctx.image(size, 'depth24plus', samples= 4)
-lightdepth = ctx.image((5000, 5000), 'rgba8unorm')
+lightdepth = ctx.image((5000, 5000), 'rgba32float')
 output = ctx.image(size, 'rgba8unorm')
 
 #####################################################################################
