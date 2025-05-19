@@ -27,7 +27,12 @@ pygame.init()
 #audio1 = pygame.mixer.music.load("sfx/NeuroSama-Goddess.ogg")
 #pygame.mixer.music.play(-1)
 
-pygame.display.init()
+"""
+pygame.display.gl_set_attribute(pygame.GL_CONTEXT_MAJOR_VERSION, 3)
+pygame.display.gl_set_attribute(pygame.GL_CONTEXT_MINOR_VERSION, 3)
+pygame.display.gl_set_attribute(pygame.GL_CONTEXT_PROFILE_MASK, pygame.GL_CONTEXT_PROFILE_CORE)
+pygame.display.gl_set_attribute(pygame.GL_CONTEXT_FORWARD_COMPATIBLE_FLAG, 1)
+"""
 
 screen = pygame.display.set_mode((WIDTH, HEIGHT), flags=pygame.OPENGL|pygame.DOUBLEBUF)
 clock = pygame.time.Clock()
