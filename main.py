@@ -18,7 +18,6 @@ import zengl
 import cv2
 import sys
 import time
-import cProfile
 
 HEIGHT, WIDTH = 1080, 1920
 
