@@ -34,7 +34,7 @@ ctx = zengl.context()
 size = pygame.display.get_window_size()
 image = ctx.image(size, 'rgba8unorm', samples= 4)
 depth = ctx.image(size, 'depth24plus', samples= 4)
-lightdepth = ctx.image((5000, 5000), 'rgba32float')
+lightdepth = ctx.image((5000, 5000), 'rgba8unorm')
 output = ctx.image(size, 'rgba8unorm')
 
 #####################################################################################
