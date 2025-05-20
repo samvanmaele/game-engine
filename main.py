@@ -363,7 +363,7 @@ def shader3D(vertexBuffer, normBuffer, texBuffer, texture):
 
             uniform sampler2D material;
             uniform highp sampler2D lightdepth;
-            uniform float cascadeClip[4];
+            uniform float cascadeClip[3];
             uniform vec3 camPos;
             uniform vec3 lightposition[1];
             uniform vec3 lightcolor[1];
@@ -439,7 +439,7 @@ def shader3D(vertexBuffer, normBuffer, texBuffer, texture):
         
         uniforms={'projection': projection.flatten(),
                   'LSMvm': [np.identity(4).flatten(), np.identity(4).flatten(), np.identity(4).flatten(), np.identity(4).flatten(), np.identity(4).flatten(), np.identity(4).flatten()],
-                  'cascadeClip': depthlayers[1:5],
+                  'cascadeClip': depthlayers[1:4],
                   'camPos' : [0,0,0],
                   'lightposition': [[0, 1000, 0]],
                   'lightcolor': [[255,255,255]],
@@ -531,7 +531,7 @@ def shader3Danimated(vertexBuffer, normBuffer, texBuffer, jointDataList, weightD
 
             uniform sampler2D material;
             uniform highp sampler2D lightdepth;
-            uniform float cascadeClip[4];
+            uniform float cascadeClip[3];
             uniform vec3 camPos;
             uniform vec3 lightposition[1];
             uniform vec3 lightcolor[1];
@@ -607,7 +607,7 @@ def shader3Danimated(vertexBuffer, normBuffer, texBuffer, jointDataList, weightD
         
         uniforms={'projection': projection.flatten(),
                   'LSMvm': [np.identity(4).flatten(), np.identity(4).flatten(), np.identity(4).flatten(), np.identity(4).flatten(), np.identity(4).flatten(), np.identity(4).flatten()],
-                  'cascadeClip': depthlayers[1:5],
+                  'cascadeClip': depthlayers[1:4],
                   'animation': [np.identity(4) for i in range(nrJoints)],
                   'camPos': [0,0,0],
                   'lightposition': [[0, 1000, 0]],
@@ -717,7 +717,7 @@ def shaderDepth(vertexBuffer):
         framebuffer= [lightdepth]
     )
 def shaderTerrain(vertexBuffer, normmap, depthmap, texture):
-    
+
     return ctx.pipeline(
         vertex_shader="""
             #version 300 es
@@ -767,7 +767,7 @@ def shaderTerrain(vertexBuffer, normmap, depthmap, texture):
 
             uniform sampler2D material;
             uniform highp sampler2D lightdepth;
-            uniform float cascadeClip[4];
+            uniform float cascadeClip[3];
             uniform vec3 camPos;
             uniform vec3 lightposition[1];
             uniform vec3 lightcolor[1];
@@ -844,7 +844,7 @@ def shaderTerrain(vertexBuffer, normmap, depthmap, texture):
         uniforms={'projection': projection.flatten(),
                   'ofset': [0, 0],
                   'LSMv': [np.identity(4).flatten(), np.identity(4).flatten(), np.identity(4).flatten(), np.identity(4).flatten(), np.identity(4).flatten()],
-                  'cascadeClip': depthlayers[1:5],
+                  'cascadeClip': depthlayers[1:4],
                   'camPos' : [0,0,0],
                   'lightposition': [[0, 1000, 0]],
                   'lightcolor': [[255,255,255]],
@@ -1183,7 +1183,9 @@ class scene:
         
         pos = [int(i * 5/2 + 2500) for i in pos]
 
-        mapHeight = [self.heightmap.pixels.getpixel([pos[1] + x, pos[0] + y])[0]/32 for x, y in [(0, -1), (-1, 0), (0, 0), (1, 0), (0, 1)]]
+        mapHeight = [self.heightmap.pixels.getpixel([pos[1] + x, pos[0] + y]) for x, y in [(0, -1), (-1, 0), (0, 0), (1, 0), (0, 1)]]
+        mapHeight = [b * 8 + g * 0.03125 for r, g, b, a in mapHeight]
+
         angle = [np.arctan(mapHeight[x] - mapHeight[y]) for x, y in [(0, 2), (2, 4), (2, 1), (3, 2)]]
         
         roll = (angle[0] + angle[1]) * 0.5
