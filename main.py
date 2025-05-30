@@ -1,4 +1,5 @@
 # python -m pygbag --PYBUILD 3.12 --ume_block 0 --git --template noctx.tmpl .
+# py-spy record -o profile.svg -- python main.py
 
 # /// script
 # dependencies = [
@@ -42,8 +43,7 @@ ctx = zengl.context()
 size = pygame.display.get_window_size()
 image = ctx.image(size, 'rgba8unorm', samples= 4)
 depth = ctx.image(size, 'depth24plus', samples= 4)
-lightdepth = ctx.image((5000, 5000), 'rgba32float')
-output = ctx.image(size, 'rgba8unorm')
+lightdepth = ctx.image((4096, 4096), 'rgba32float')
 
 #####################################################################################
 
@@ -314,7 +314,156 @@ def shader2Danitex(vertexBuffer, texBuffer, texture, frameAmount):
         topology= "triangles",
         framebuffer= [image, depth]
     )
-def shader3D(vertexBuffer, normBuffer, texBuffer, texture):
+def shaderBoundingBox():
+    
+    return ctx.pipeline(
+        vertex_shader="""
+            #version 300 es
+            precision highp float;
+            
+            layout (location = 0) in int vert;
+            
+            uniform vec3 boundingBox[2];
+            uniform mat4 projection;
+            uniform mat4 view;
+            
+            void main() {
+                vec3 pos = vec3(boundingBox[vert%2].x, boundingBox[(vert/2)%2].y, boundingBox[vert/4].z);
+                gl_Position = projection * view * vec4(pos, 1);
+            }
+        """,
+        fragment_shader="""
+            #version 300 es
+            precision highp float;
+            
+            layout (location = 0) out vec4 out_color;
+
+            void main()
+            {
+                out_color = vec4(1,0,0,0.5);
+            }
+        """,
+        
+        uniforms={'projection': projection.flatten(), 'view': np.identity(4).flatten(), 'boundingBox': [[0, 660, -5], [1, 661, -4]]},
+        blend={'enable': True, 'src_color': 'src_alpha', 'dst_color': 'one_minus_src_alpha'},
+        vertex_buffers= zengl.bind(ctx.buffer(np.array([0, 2, 1, 3, 1, 2, 4, 5, 6, 7, 6, 5, 0, 1, 4, 5, 4, 1, 2, 6, 3, 7, 3, 6, 0, 4, 2, 6, 2, 4, 1, 3, 5, 7, 5, 3], dtype=np.int32)), "1i", 0),
+        vertex_count=36,
+        cull_face= "back",
+        topology= "triangles",
+        framebuffer= [image, depth]
+    )
+
+#depthshaders for shadowmapping
+def shaderDepth(vertexBuffer):
+
+    return ctx.pipeline(
+        vertex_shader="""
+            #version 300 es
+            #extension GL_AMD_vertex_shader_layer : enable
+            precision highp float;
+            
+            layout(location = 0) in vec3 vpos;
+            
+            uniform mat4 LSMm[5];
+
+            flat out int instanceID;
+
+            void main()
+            {
+                gl_Position = LSMm[gl_InstanceID] * LSMm[4] * vec4(vpos, 1);
+                instanceID = gl_InstanceID;
+            }
+        """,
+        fragment_shader="""
+            #version 300 es
+            precision highp float;
+
+            flat in int instanceID;
+
+            layout (location = 0) out vec4 colour;
+
+            void main()
+            {
+                vec4 tempcol = vec4(0.0);
+                tempcol[instanceID] = 1.0 - gl_FragCoord.z;
+                colour = tempcol;
+            }
+        """,
+        
+        uniforms={'LSMm': [np.identity(4).flatten(), np.identity(4).flatten(), np.identity(4).flatten(), np.identity(4).flatten(), np.identity(4).flatten()]},
+
+        blend={'enable': True, 'src_color': 'src_alpha', 'dst_color': 'one_minus_src_alpha', 'op_color': 'max', 'op_alpha' : 'max'},
+
+        vertex_buffers= zengl.bind(ctx.buffer(vertexBuffer), "3f", 0),
+        
+        vertex_count= len(vertexBuffer),
+        cull_face= "front",
+        instance_count= 4,
+        topology= "triangles",
+        framebuffer= [lightdepth]
+    )
+def shaderTerrainDepth(vertexBuffer, depthmap):
+
+    return ctx.pipeline(
+        vertex_shader="""
+            #version 300 es
+            #extension GL_AMD_vertex_shader_layer : enable
+            precision highp float;
+            
+            layout(location = 0) in vec3 vpos;
+            
+            uniform mat4 LSMm[5];
+            uniform sampler2D heightmap;
+            uniform vec2 ofset;
+
+            flat out int instanceID;
+
+            void main()
+            {
+                vec2 TexCoords = (vpos.xz + ofset)/2000.0 + 0.5;
+                vec2 rawHeight = texture(heightmap, TexCoords).bg;
+                float height = (rawHeight.x + rawHeight.y / 256.0) * (31875.0/32.0);
+
+                vec3 pos = vpos + vec3(ofset.x, height, ofset.y);
+                gl_Position = LSMm[gl_InstanceID] * LSMm[4] * vec4(pos, 1);
+                instanceID = gl_InstanceID;
+            }
+        """,
+        fragment_shader="""
+            #version 300 es
+            precision highp float;
+
+            flat in int instanceID;
+
+            layout (location = 0) out vec4 colour;
+
+            void main()
+            {
+                vec4 tempcol = vec4(0.0);
+                tempcol[instanceID] = 1.0 - gl_FragCoord.z;
+                colour = tempcol;
+            }
+        """,
+        
+        uniforms={'LSMm': [np.identity(4).flatten(), np.identity(4).flatten(), np.identity(4).flatten(), np.identity(4).flatten(), np.identity(4).flatten()],
+                  'ofset': [0, 0]},
+        
+        layout= [{'name': 'heightmap', 'binding': 0}],
+        resources= [{'type': 'sampler', 'binding': 0, 'image': depthmap, 'wrap_x': 'clamp_to_edge', 'wrap_y': 'clamp_to_edge', 'min_filter': 'nearest', 'mag_filter': 'nearest'}],
+
+        blend={'enable': True, 'src_color': 'src_alpha', 'dst_color': 'one_minus_src_alpha', 'op_color': 'max', 'op_alpha' : 'max'},
+
+        vertex_buffers= zengl.bind(ctx.buffer(vertexBuffer), "3f", 0),
+        
+        vertex_count= len(vertexBuffer),
+        cull_face= "front",
+        instance_count= 4,
+        topology= "triangles",
+        framebuffer= [lightdepth]
+    )
+
+#shadowmapping
+def shaderShadow3D(vertexBuffer, normBuffer, texBuffer, texture):
     
     return ctx.pipeline(
         vertex_shader="""
@@ -396,7 +545,7 @@ def shader3D(vertexBuffer, normBuffer, texBuffer, texture):
                         vec2 local = projCoords.xy + vec2(x, y) * texelSize;
                         shadow += any(lessThan(vec2(0.5), abs(local - 0.5))) ? 1 : 0;
 
-                        float pcfDepth = 1.0 - texture(lightdepth, local)[cascadeIndex]; 
+                        float pcfDepth = 1.0 - texture(lightdepth, local)[cascadeIndex];
                         shadow += (pcfDepth + 0.00005) > projCoords.z ? 1 : 0;
                     }
                 }
@@ -460,7 +609,7 @@ def shader3D(vertexBuffer, normBuffer, texBuffer, texture):
         topology= "triangles",
         framebuffer= [image, depth]
     )
-def shader3Danimated(vertexBuffer, normBuffer, texBuffer, jointDataList, weightDataList, nrJoints, texture):
+def shaderShadow3Danimated(vertexBuffer, normBuffer, texBuffer, jointDataList, weightDataList, nrJoints, texture):
     
     return ctx.pipeline(
         vertex_shader="""
@@ -630,93 +779,7 @@ def shader3Danimated(vertexBuffer, normBuffer, texBuffer, jointDataList, weightD
         topology= "triangles",
         framebuffer= [image, depth]
     )
-def shaderBoundingBox():
-    
-    return ctx.pipeline(
-        vertex_shader="""
-            #version 300 es
-            precision highp float;
-            
-            layout (location = 0) in int vert;
-            
-            uniform vec3 boundingBox[2];
-            uniform mat4 projection;
-            uniform mat4 view;
-            
-            void main() {
-                vec3 pos = vec3(boundingBox[vert%2].x, boundingBox[(vert/2)%2].y, boundingBox[vert/4].z);
-                gl_Position = projection * view * vec4(pos, 1);
-            }
-        """,
-        fragment_shader="""
-            #version 300 es
-            precision highp float;
-            
-            layout (location = 0) out vec4 out_color;
-
-            void main()
-            {
-                out_color = vec4(1,0,0,0.5);
-            }
-        """,
-        
-        uniforms={'projection': projection.flatten(), 'view': np.identity(4).flatten(), 'boundingBox': [[0, 660, -5], [1, 661, -4]]},
-        blend={'enable': True, 'src_color': 'src_alpha', 'dst_color': 'one_minus_src_alpha'},
-        vertex_buffers= zengl.bind(ctx.buffer(np.array([0, 2, 1, 3, 1, 2, 4, 5, 6, 7, 6, 5, 0, 1, 4, 5, 4, 1, 2, 6, 3, 7, 3, 6, 0, 4, 2, 6, 2, 4, 1, 3, 5, 7, 5, 3], dtype=np.int32)), "1i", 0),
-        vertex_count=36,
-        cull_face= "back",
-        topology= "triangles",
-        framebuffer= [image, depth]
-    )
-def shaderDepth(vertexBuffer):
-
-    return ctx.pipeline(
-        vertex_shader="""
-            #version 300 es
-            #extension GL_AMD_vertex_shader_layer : enable
-            precision highp float;
-            
-            layout(location = 0) in vec3 vpos;
-            
-            uniform mat4 LSMm[5];
-
-            flat out int instanceID;
-
-            void main()
-            {
-                gl_Position = LSMm[gl_InstanceID] * LSMm[4] * vec4(vpos, 1);
-                instanceID = gl_InstanceID;
-            }
-        """,
-        fragment_shader="""
-            #version 300 es
-            precision highp float;
-
-            flat in int instanceID;
-
-            layout (location = 0) out vec4 colour;
-
-            void main()
-            {
-                vec4 tempcol = vec4(0.0);
-                tempcol[instanceID] = 1.0 - gl_FragCoord.z;
-                colour = tempcol;
-            }
-        """,
-        
-        uniforms={'LSMm': [np.identity(4).flatten(), np.identity(4).flatten(), np.identity(4).flatten(), np.identity(4).flatten(), np.identity(4).flatten()]},
-
-        blend={'enable': True, 'src_color': 'src_alpha', 'dst_color': 'one_minus_src_alpha', 'op_color': 'max', 'op_alpha' : 'max'},
-
-        vertex_buffers= zengl.bind(ctx.buffer(vertexBuffer), "3f", 0),
-        
-        vertex_count= len(vertexBuffer),
-        cull_face= "front",
-        instance_count= 4,
-        topology= "triangles",
-        framebuffer= [lightdepth]
-    )
-def shaderTerrain(vertexBuffer, normmap, depthmap, texture):
+def shaderShadowTerrain(vertexBuffer, normmap, depthmap, texture):
 
     return ctx.pipeline(
         vertex_shader="""
@@ -745,6 +808,7 @@ def shaderTerrain(vertexBuffer, normmap, depthmap, texture):
 
                 fragPos = vpos + vec3(ofset.x, height, ofset.y);
                 fragNorm = normalize(texture(normmap, TexCoords).rbg * 2.0 - 1.0);
+                fragNorm.b = -fragNorm.b;
 
                 for (int i = 0; i < 4; i++) {
                     lightSpace[i] = LSMv[i] * vec4(fragPos, 1);
@@ -867,65 +931,335 @@ def shaderTerrain(vertexBuffer, normmap, depthmap, texture):
         topology= "triangles",
         framebuffer= [image, depth]
         )
-def shaderTerrainDepth(vertexBuffer, depthmap):
 
+#no shadowmapping
+def shader3D(vertexBuffer, normBuffer, texBuffer, texture):
+    
     return ctx.pipeline(
         vertex_shader="""
             #version 300 es
-            #extension GL_AMD_vertex_shader_layer : enable
             precision highp float;
             
             layout(location = 0) in vec3 vpos;
+            layout(location = 1) in vec3 vnorm;
+            layout(location = 2) in vec2 vtex;
             
-            uniform mat4 LSMm[5];
-            uniform sampler2D heightmap;
-            uniform vec2 ofset;
-
-            flat out int instanceID;
-
+            uniform mat4 projection;
+            uniform mat4 LSMvm[2];
+            
+            out vec2 TexCoords;
+            out vec3 fragPos;
+            out vec3 fragNorm;
+            
             void main()
             {
-                vec2 TexCoords = (vpos.xz + ofset)/2000.0 + 0.5;
-                vec2 rawHeight = texture(heightmap, TexCoords).bg;
-                float height = (rawHeight.x + rawHeight.y / 256.0) * (31875.0/32.0);
+                vec4 vertPos = LSMvm[1] * vec4(vpos, 1.0);
+                
+                TexCoords = vtex;
+                fragPos = vertPos.xyz;
+                fragNorm = (LSMvm[1] * vec4(vnorm, 0)).xyz;
 
-                vec3 pos = vpos + vec3(ofset.x, height, ofset.y);
-                gl_Position = LSMm[gl_InstanceID] * LSMm[4] * vec4(pos, 1);
-                instanceID = gl_InstanceID;
+                vec4 viewPos = LSMvm[0] * vertPos;
+                gl_Position = projection * viewPos;
             }
         """,
         fragment_shader="""
             #version 300 es
             precision highp float;
+            
+            in vec2 TexCoords;
+            in vec3 fragPos;
+            in vec3 fragNorm;
 
-            flat in int instanceID;
+            uniform sampler2D material;
+            uniform vec3 camPos;
+            uniform vec3 lightposition[1];
+            uniform vec3 lightcolor[1];
+            uniform float lightstrength[1];
+            
+            layout (location = 0) out vec4 color;
 
-            layout (location = 0) out vec4 colour;
+            vec3 calcPointlight(int i)
+            {
+                vec3 baseTexture = texture(material, TexCoords).rgb;
+                vec3 result = vec3(0);
+                
+                vec3 relLightPos = lightposition[i] - fragPos;
+                float distance = length(relLightPos);
+                relLightPos = normalize(relLightPos);
+                
+                vec3 relCamPos = normalize(camPos - fragPos);
+                vec3 halfVec = normalize(relLightPos + relCamPos);
 
+                vec3 lightval = lightcolor[i] * lightstrength[i];
+                float distsquared = distance * distance;
+                float dotfrag = dot(fragNorm, relLightPos);
+
+                result += lightval * max(0.0, dotfrag) / distsquared * baseTexture; //diffuse
+                result += lightval * pow(max(0.0, dot(fragNorm, halfVec)), 32.0) / distsquared; //specular
+
+                return result;
+            }
+            
             void main()
             {
-                vec4 tempcol = vec4(0.0);
-                tempcol[instanceID] = 1.0 - gl_FragCoord.z;
-                colour = tempcol;
+                vec4 baseTex = texture(material, TexCoords);
+                vec3 temp = 0.2 * baseTex.rgb; //ambient
+                temp += calcPointlight(0);
+
+                color = pow(vec4(temp, baseTex.a), vec4(0.45));
             }
         """,
         
-        uniforms={'LSMm': [np.identity(4).flatten(), np.identity(4).flatten(), np.identity(4).flatten(), np.identity(4).flatten(), np.identity(4).flatten()],
-                  'ofset': [0, 0]},
+        uniforms={'projection': projection.flatten(),
+                  'LSMvm': [np.identity(4).flatten(), np.identity(4).flatten()],
+                  'camPos' : [0,0,0],
+                  'lightposition': [[0, 1000, 0]],
+                  'lightcolor': [[255,255,255]],
+                  'lightstrength': [500]},
         
-        layout= [{'name': 'heightmap', 'binding': 0}],
-        resources= [{'type': 'sampler', 'binding': 0, 'image': depthmap, 'wrap_x': 'clamp_to_edge', 'wrap_y': 'clamp_to_edge', 'min_filter': 'nearest', 'mag_filter': 'nearest'}],
+        blend={'enable': True, 'src_color': 'src_alpha', 'dst_color': 'one_minus_src_alpha'},
+        layout=[{'name': 'material', 'binding': 0}],
+        resources=[{'type': 'sampler', 'binding': 0, 'image': texture, 'wrap_x': 'clamp_to_edge', 'wrap_y': 'clamp_to_edge', 'min_filter': 'nearest', 'mag_filter': 'nearest'}],
+        
+        vertex_buffers= [*zengl.bind(ctx.buffer(vertexBuffer), "3f", 0),
+                         *zengl.bind(ctx.buffer(normBuffer), "3f", 1),
+                         *zengl.bind(ctx.buffer(texBuffer), "2f", 2)],
+        
+        vertex_count= len(vertexBuffer),
+        cull_face= "back",
+        topology= "triangles",
+        framebuffer= [image, depth]
+    )
+def shader3Danimated(vertexBuffer, normBuffer, texBuffer, jointDataList, weightDataList, nrJoints, texture):
+    
+    return ctx.pipeline(
+        vertex_shader="""
+            #version 300 es
+            precision highp float;
+            
+            layout(location = 0) in vec3 vpos;
+            layout(location = 1) in vec3 vnorm;
+            layout(location = 2) in vec2 vtex;
+            layout(location = 3) in ivec4 vboneIds; 
+            layout(location = 4) in vec4 vweights;
+            
+            uniform mat4 projection;
+            uniform mat4 LSMvm[2];
+            uniform mat4 animation[50];
+            
+            out vec2 TexCoords;
+            out vec3 fragPos;
+            out vec3 fragNorm;
+            
+            vec4 applyBone(vec4 p)
+            {
+                vec4 result = vec4(0.0);
+                for(int i = 0; i < 4; ++i)
+                {
+                    if(vboneIds[i] >= 100) 
+                    {
+                        result = p;
+                        break;
+                    }
+                    result += vweights[i] * (animation[vboneIds[i]] * p);
+                }
+                return result;
+            }
+            
+            void main()
+            {
+                
+                vec4 position = applyBone(vec4(vpos, 1.0));
+                vec4 normal = normalize(applyBone(vec4(vnorm, 0.0)));
+                
+                vec4 vertPos = LSMvm[1] * position;
+                
+                TexCoords = vtex;
+                fragPos = vertPos.xyz;
+                fragNorm = (LSMvm[0] * normal).xyz;
 
-        blend={'enable': True, 'src_color': 'src_alpha', 'dst_color': 'one_minus_src_alpha', 'op_color': 'max', 'op_alpha' : 'max'},
+                vec4 viewPos = LSMvm[0] * vertPos;
+                gl_Position = projection * viewPos;
+            }
+        """,
+        fragment_shader="""
+            #version 300 es
+            precision highp float;
+            
+            in vec2 TexCoords;
+            in vec3 fragPos;
+            in vec3 fragNorm;
 
+            uniform sampler2D material;
+            uniform vec3 camPos;
+            uniform vec3 lightposition[1];
+            uniform vec3 lightcolor[1];
+            uniform float lightstrength[1];
+            
+            layout (location = 0) out vec4 color;
+
+            vec3 calcPointlight(int i)
+            {
+                vec3 baseTexture = texture(material, TexCoords).rgb;
+                vec3 result = vec3(0);
+                
+                vec3 relLightPos = lightposition[i] - fragPos;
+                float distance = length(relLightPos);
+                relLightPos = normalize(relLightPos);
+                
+                vec3 relCamPos = normalize(camPos - fragPos);
+                vec3 halfVec = normalize(relLightPos + relCamPos);
+
+                vec3 lightval = lightcolor[i] * lightstrength[i];
+                float distsquared = distance * distance;
+                float dotfrag = dot(fragNorm, relLightPos);
+
+                result += lightval * max(0.0, dotfrag) / distsquared * baseTexture; //diffuse
+                result += lightval * pow(max(0.0, dot(fragNorm, halfVec)), 32.0) / distsquared; //specular
+
+                return result;
+            }
+            
+            void main()
+            {
+                vec4 baseTex = texture(material, TexCoords);
+                vec3 temp = 0.2 * baseTex.rgb; //ambient
+                temp += calcPointlight(0);
+
+                color = pow(vec4(temp, baseTex.a), vec4(0.45));
+            }
+        """,
+        
+        uniforms={'projection': projection.flatten(),
+                  'LSMvm': [np.identity(4).flatten(), np.identity(4).flatten()],
+                  'animation': [np.identity(4) for i in range(nrJoints)],
+                  'camPos': [0,0,0],
+                  'lightposition': [[0, 1000, 0]],
+                  'lightcolor': [[255,255,255]],
+                  'lightstrength': [500]},
+        
+        blend={'enable': True, 'src_color': 'src_alpha', 'dst_color': 'one_minus_src_alpha'},
+        layout=[{'name': 'material', 'binding': 0}],
+        resources=[{'type': 'sampler', 'binding': 0, 'image': texture, 'wrap_x': 'clamp_to_edge', 'wrap_y': 'clamp_to_edge', 'min_filter': 'nearest', 'mag_filter': 'nearest'}],
+        
+        vertex_buffers= [*zengl.bind(ctx.buffer(vertexBuffer), "3f", 0),
+                         *zengl.bind(ctx.buffer(normBuffer), "3f", 1),
+                         *zengl.bind(ctx.buffer(texBuffer), "2f", 2),
+                         *zengl.bind(ctx.buffer(jointDataList), "4i", 3),
+                         *zengl.bind(ctx.buffer(weightDataList), "4f", 4)],
+        
+        vertex_count= len(vertexBuffer),
+        cull_face= "back",
+        topology= "triangles",
+        framebuffer= [image, depth]
+    )
+def shaderTerrain(vertexBuffer, normmap, depthmap, texture):
+
+    return ctx.pipeline(
+        vertex_shader="""
+            #version 300 es
+            precision highp float;
+            
+            layout(location = 0) in vec3 vpos;
+
+            uniform mat4 projection;
+            uniform mat4 LSMv;
+            uniform sampler2D normmap;
+            uniform sampler2D heightmap;
+            uniform vec2 ofset;
+
+            out vec2 TexCoords;
+            out vec3 fragPos;
+            out vec3 fragNorm;
+
+            void main()
+            {
+                TexCoords = (vpos.xz + ofset)/2000.0 + 0.5;
+                vec2 rawHeight = texture(heightmap, TexCoords).bg;
+                float height = (rawHeight.x + rawHeight.y / 256.0) * (31875.0/32.0);
+
+                fragPos = vpos + vec3(ofset.x, height, ofset.y);
+                fragNorm = normalize(texture(normmap, TexCoords).rbg * 2.0 - 1.0);
+                fragNorm.b = -fragNorm.b;
+
+                vec4 viewPos = LSMv * vec4(fragPos, 1);
+                gl_Position = projection * viewPos;
+            }
+        """,
+        fragment_shader="""
+            #version 300 es
+            precision highp float;
+            
+            in vec2 TexCoords;
+            in vec3 fragPos;
+            in vec3 fragNorm;
+            in vec4 lightSpace[4];
+            in float viewPosZ;
+
+            uniform sampler2D material;
+            uniform vec3 camPos;
+            uniform vec3 lightposition[1];
+            uniform vec3 lightcolor[1];
+            uniform float lightstrength[1];
+            
+            layout (location = 0) out vec4 color;
+            
+            vec3 calcPointlight(int i)
+            {
+                vec3 baseTexture = texture(material, TexCoords).rgb;
+                vec3 result = vec3(0);
+                
+                vec3 relLightPos = lightposition[i] - fragPos;
+                float distance = length(relLightPos);
+                relLightPos = normalize(relLightPos);
+                
+                vec3 relCamPos = normalize(camPos - fragPos);
+                vec3 halfVec = normalize(relLightPos + relCamPos);
+
+                vec3 lightval = lightcolor[i] * lightstrength[i];
+                float distsquared = distance * distance;
+                float dotfrag = dot(fragNorm, relLightPos);
+
+                result += lightval * max(0.0, dotfrag) / distsquared * baseTexture; //diffuse
+                result += lightval * pow(max(0.0, dot(fragNorm, halfVec)), 32.0) / distsquared; //specular
+
+                return result;
+            }
+            
+            void main()
+            {
+                vec4 baseTex = texture(material, TexCoords);
+                vec3 temp = 0.2 * baseTex.rgb; //ambient
+                temp += calcPointlight(0);
+
+                color = pow(vec4(temp, baseTex.a), vec4(0.45));
+            }
+        """,
+        
+        uniforms={'projection': projection.flatten(),
+                  'ofset': [0, 0],
+                  'LSMv': np.identity(4).flatten(),
+                  'camPos' : [0,0,0],
+                  'lightposition': [[0, 1000, 0]],
+                  'lightcolor': [[255,255,255]],
+                  'lightstrength': [500]},
+        
+        blend={'enable': True, 'src_color': 'src_alpha', 'dst_color': 'one_minus_src_alpha'},
+        layout=[{'name': 'normmap', 'binding': 0},
+                {'name': 'heightmap', 'binding': 1},
+                {'name': 'material', 'binding': 2}],
+        resources=[{'type': 'sampler', 'binding': 0, 'image': normmap, 'wrap_x': 'clamp_to_edge', 'wrap_y': 'clamp_to_edge', 'min_filter': 'nearest', 'mag_filter': 'nearest'},
+                   {'type': 'sampler', 'binding': 1, 'image': depthmap, 'wrap_x': 'clamp_to_edge', 'wrap_y': 'clamp_to_edge', 'min_filter': 'nearest', 'mag_filter': 'nearest'},
+                   {'type': 'sampler', 'binding': 2, 'image': texture, 'wrap_x': 'repeat', 'wrap_y': 'repeat', 'min_filter': 'nearest', 'mag_filter': 'nearest'}],
+        
         vertex_buffers= zengl.bind(ctx.buffer(vertexBuffer), "3f", 0),
         
         vertex_count= len(vertexBuffer),
-        cull_face= "front",
-        instance_count= 4,
+        cull_face= "back",
         topology= "triangles",
-        framebuffer= [lightdepth]
-    )
+        framebuffer= [image, depth]
+        )
 
 #####################################################################################
 
@@ -1109,9 +1443,11 @@ class scene:
                                                                                                                                                  material("models/V-nexus/vedal's_house/vedals_house.png")])],
                 }
         
-        self.lightProj = [np.linalg.inv(create_perspective_projection_from_bounds(-depthlayers[i], depthlayers[i], -depthlayers[i], depthlayers[i], depthlayers[i], depthlayers[i+1])) for i in range(4)]
-        self.preFrustum = [[-1,-1,-1,1], [-1,-1,1,1], [-1,1,-1,1], [-1,1,1,1], [1,-1,-1,1], [1,-1,1,1], [1,1,-1,1], [1,1,1,1]]
-        self.identity = np.identity(4, dtype= np.float32)
+        box = [[-1,-1,-1,1], [1,-1,-1,1], [1,1,-1,1], [-1,1,-1,1], [-1,-1,1,1], [1,-1,1,1], [1,1,1,1], [-1,1,1,1]]
+        self.preFrustum = np.array([box @ np.linalg.inv(create_perspective_projection_from_bounds(-depthlayers[i], depthlayers[i], -depthlayers[i], depthlayers[i], depthlayers[i], depthlayers[i+1])) for i in range(4)], dtype= np.float32)
+        self.frustumdepth = np.array([depthlayers[i] + depthlayers[i+1] * 0.5 for i in range(4)], dtype= np.float32).reshape((4, 1))
+        self.invView = np.identity(4, dtype= np.float32)
+        self.preFrustum /= self.preFrustum[...,3,None]
 
         self.boundingbox = boundingBoxMesh()
 
@@ -1123,6 +1459,8 @@ class scene:
         self.lightforwards = np.array((cosX*cosY, sinY, -sinX*cosY))
         self.lightright = (sinX, 0, cosX)
         self.lightup = np.array((-cosX*sinY, cosY, sinX*sinY))
+
+        self.lightview = np.array([get_view(self.lightforwards, self.lightup, self.lightright, self.player.camera.position + self.player.camera.forwards * self.frustumdepth[i]) for i in range(4)], dtype= np.float32)
 
         self.terrain.shaders.uniforms['lightposition'][:] = np.ascontiguousarray(self.light.position, 'f').data.cast('B')
         self.terrain.shaders.uniforms['lightcolor'][:] = np.ascontiguousarray(self.light.color, 'f').data.cast('B')
@@ -1183,8 +1521,8 @@ class scene:
         
         pos = [int(i * 5/2 + 2500) for i in pos]
 
-        mapHeight = [self.heightmap.pixels.getpixel([pos[1] + x, pos[0] + y]) for x, y in [(0, -1), (-1, 0), (0, 0), (1, 0), (0, 1)]]
-        mapHeight = [b * 8 + g * 0.03125 for r, g, b, a in mapHeight]
+        mapHeight = [self.heightmap.pixels.getpixel([pos[0] + x, pos[1] + y]) for x, y in [(0, -1), (-1, 0), (0, 0), (1, 0), (0, 1)]]
+        mapHeight = [b * 8 + g * 8/256 for r, g, b, a in mapHeight]
 
         angle = [np.arctan(mapHeight[x] - mapHeight[y]) for x, y in [(0, 2), (2, 4), (2, 1), (3, 2)]]
         
@@ -1286,54 +1624,47 @@ class scene:
         view = cam.getViewTransform()
         frustum = cam.frustum
 
-        lightSpaceMatrix = [self.makeLightProjection(view, self.lightProj[i]) for i in range(4)]
+        lightSpaceMatrix = self.getLightSpaceMatrix(view)
+        
         terrain = self.terrain
         
         for entity_type, entity in self.entities.items():
-            self.drawDepth(entity_type, entity, lightSpaceMatrix)
+            if entity_type is ENTITY_TYPE['bounding_box']: return    
+            entity[1].drawDepth(entity[0].transformMat, lightSpaceMatrix)
+        
         terrain.drawDepth(np.identity(4), lightSpaceMatrix)
 
         lightpos = self.light.position
         campos = cam.position
         for entity in self.entities.values():
             self.draw(entity, lightSpaceMatrix, frustum, view, campos, lightpos)
+        
         terrain.drawTerrain(view, lightSpaceMatrix, lightpos)
 
         self.boundingbox.draw(view, entity[0].transformMat, lightSpaceMatrix, campos, self.light.position)
         
-        image.blit(output)
-        output.blit()
+        image.blit()
         ctx.end_frame()
         pygame.display.flip()
 
-    def makeLightProjection(self, view, proj):
+    def getLightSpaceMatrix(self, view):
+
+        position = self.player.camera.position + self.player.camera.forwards * self.frustumdepth
+        self.lightview[:, 3, 0:3] = np.stack([-position @ self.lightright, -position @ self.lightup, position @ self.lightforwards], axis=1)
 
         transView = view[:3,:3].T
-        transTrans = view[3,:3] @ transView
+        self.invView[:3,:3] = transView
+        self.invView[3,:3] = -view[3,:3] @ transView
 
-        invView = self.identity.copy()
-        invView[:3,:3] = transView
-        invView[3,:3] = -transTrans
+        viewcorners = self.preFrustum @ self.invView @ self.lightview
 
-        frustumcorners = self.preFrustum @ proj @ invView
-        frustumcorners /= frustumcorners[:,3:None]
-        center = np.mean(frustumcorners, axis= 0)[0:3]
+        mins = viewcorners.min(axis=1)[:, :3]
+        maxs = viewcorners.max(axis=1)[:, :3]
 
-        lightview = get_view(self.lightforwards, self.lightup, self.lightright, center)
-        viewcorners = frustumcorners @ lightview
-        minX, minY, minZ = viewcorners.min(axis=0)[0:3]
-        maxX, maxY, maxZ = viewcorners.max(axis=0)[0:3]
+        minZ = -10 * mins[:, 2]
+        maxZ = -10 * maxs[:, 2]
 
-        minZ *= 10 if minZ < 0 else 0.1
-        maxZ *= 0.1 if maxZ < 0 else 10
-
-        lightProjection = create_orthogonal_projection(minX, maxX, minY, maxY, -maxZ, -minZ)
-        return lightview @ lightProjection
-
-    def drawDepth(self, entity_type, entity, lightSpaceMatrix):
-
-        if entity_type is ENTITY_TYPE['bounding_box']: return    
-        entity[1].drawDepth(entity[0].transformMat, lightSpaceMatrix)
+        return self.lightview @ np.array([create_orthogonal_projection(mins[i, 0], maxs[i, 0], mins[i, 1], maxs[i, 1], maxZ[i], minZ[i]) for i in range(4)])
     
     def draw(self, entity, lightSpaceMatrix, frustum, view, campos, lightpos):
         
@@ -1509,8 +1840,7 @@ class menu:
         for button in self.buttons:
             button.draw()
         
-        image.blit(output)
-        output.blit()
+        image.blit()
         ctx.end_frame()
         
         pygame.display.flip()
@@ -1656,14 +1986,16 @@ class gltfMesh:
             self.nrJoints = len(self.transformMat[0]) // (16 * self.timeData)
             self.transformMat = [[[self.transformMat[anim][i+j*self.nrJoints : i+j*self.nrJoints+16] for i in range(0, 16*self.nrJoints, 16)] for j in range(0, 16*self.timeData, 16)] for anim in range(nrAnimations)]
             
-            self.shaders = [shader3Danimated(vertexDataList[i], normalDataList[i], texCoordDataList[i], jointDataList[i], weightDataList[i], self.nrJoints, textures[i].img) for i in range(listLenght)]
+        #shaders
 
-        elif filename == "models/terrain/terrain.gltf":
-            self.shaders = shaderTerrain(vertexDataList[0], textures[0].img, textures[1].img, textures[2].img)
-        
+        if filename == "models/terrain/terrain.gltf":
+            self.shaders = shaderShadowTerrain(vertexDataList[0], textures[0].img, textures[1].img, textures[2].img)
+        elif self.hasJoints:
+            self.shaders = [shaderShadow3Danimated(vertexDataList[i], normalDataList[i], texCoordDataList[i], jointDataList[i], weightDataList[i], self.nrJoints, textures[i].img) for i in range(listLenght)]
         else:
-            self.shaders = [shader3D(vertexDataList[i], normalDataList[i], texCoordDataList[i], textures[i].img) for i in range(listLenght)]
+            self.shaders = [shaderShadow3D(vertexDataList[i], normalDataList[i], texCoordDataList[i], textures[i].img) for i in range(listLenght)]
         
+        #depthshaders
         if filename == "models/terrain/terrain.gltf":
             self.depth = [shaderTerrainDepth(vertexDataList[0], textures[1].img)]
         else:
