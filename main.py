@@ -1,4 +1,4 @@
-# python -m pygbag --PYBUILD 3.12 --ume_block 0 --git --template noctx.tmpl .
+# python -m pygbag --PYBUILD 3.12 --ume_block 0 --no_opt --git --template noctx.tmpl .
 # py-spy record -o profile.svg -- python main.py
 
 # /// script
@@ -321,7 +321,13 @@ VIEW = ctx.buffer(size= 64)
 # 0 = no shadow
 # 1 = single shadow drawcall per frame, no player shadows
 # 2 = shadow drawcall per entity, moving shadows
-DYNAMIC_SHADOWS = 2
+
+import platform
+
+if hasattr(platform, "window") and platform.window.mobile_check():
+    DYNAMIC_SHADOWS = 0
+else:
+    DYNAMIC_SHADOWS = 2
 
 if DYNAMIC_SHADOWS:
     #depthshaders for shadowmapping
