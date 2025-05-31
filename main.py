@@ -44,6 +44,7 @@ size = pygame.display.get_window_size()
 image = ctx.image(size, 'rgba8unorm', samples= 4)
 depth = ctx.image(size, 'depth24plus', samples= 4)
 lightdepth = ctx.image((4096, 4096), 'rgba32float')
+output = ctx.image(size, 'rgba8unorm')
 
 #####################################################################################
 
@@ -1751,7 +1752,8 @@ class scene:
         terrain.shaders.render()
         self.boundingbox.draw()
         
-        image.blit()
+        image.blit(output)
+        output.blit()
         ctx.end_frame()
         pygame.display.flip()
 
