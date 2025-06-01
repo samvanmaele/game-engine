@@ -48,6 +48,8 @@ depth = ctx.image(size, 'depth24plus', samples= 4)
 lightdepth = ctx.image((4096, 4096), 'rgba32float')
 output = ctx.image(size, 'rgba8unorm')
 
+fingers = {}
+
 #####################################################################################
 
 input_map = {'right': pygame.K_d,
@@ -410,7 +412,7 @@ if DYNAMIC_SHADOWS:
                 {
                     vec2 TexCoords = (vpos.xz + ofset)/2000.0 + 0.5;
                     vec2 rawHeight = texture(heightmap, TexCoords).bg;
-                    float height = (rawHeight.x + rawHeight.y / 256.0) * 977.7;
+                    float height = (rawHeight.x + rawHeight.y / 256.0) * 977.5;
 
                     vec3 pos = vpos + vec3(ofset.x, height, ofset.y);
                     gl_Position = LSM[gl_InstanceID] * model * vec4(pos, 1);
@@ -833,7 +835,7 @@ if DYNAMIC_SHADOWS:
                 {
                     TexCoords = (vpos.xz + ofset)/2000.0 + 0.5;
                     vec2 rawHeight = texture(heightmap, TexCoords).bg;
-                    float height = (rawHeight.x + rawHeight.y / 256.0) * 977.7;
+                    float height = (rawHeight.x + rawHeight.y / 256.0) * 977.5;
 
                     fragPos = vpos + vec3(ofset.x, height, ofset.y);
                     fragNorm = normalize(texture(normmap, TexCoords).rbg * 2.0 - 1.0);
@@ -1230,7 +1232,7 @@ else:
                 {
                     TexCoords = (vpos.xz + ofset)/2000.0 + 0.5;
                     vec2 rawHeight = texture(heightmap, TexCoords).bg;
-                    float height = (rawHeight.x + rawHeight.y / 256.0) * 977.7;
+                    float height = (rawHeight.x + rawHeight.y / 256.0) * 977.5;
 
                     fragPos = vpos + vec3(ofset.x, height, ofset.y);
                     fragNorm = normalize(texture(normmap, TexCoords).rbg * 2.0 - 1.0);
@@ -1644,16 +1646,16 @@ class scene:
         pos = [int(i * 4096/2000 + 2048) for i in pos]
 
         mapHeight = [self.heightmap.pixels.getpixel([pos[0] + x, pos[1] + y]) for x, y in [(0, -1), (-1, 0), (0, 0), (1, 0), (0, 1)]]
-        mapHeight = [b * 8 + g * 0.03125 for r, g, b, a in mapHeight]
+        mapHeight = [b * 8 + g * 8/256 for r, g, b, a in mapHeight]
 
-        angle = [np.arctan(mapHeight[x] - mapHeight[y]) for x, y in [(0, 2), (2, 4), (2, 1), (3, 2)]]
+        angle = [np.arctan(mapHeight[y] - mapHeight[x]) for x, y in [(2, 1), (3, 2), (0, 2), (2, 4)]]
         
         roll = (angle[0] + angle[1]) * 0.5
         pitch = (angle[2] + angle[3]) * 0.5
 
         self.player.eulers[0] = pitch
         self.player.eulers[1] = roll
-        self.height = max(mapHeight[2] * 977.7/(256*8), collisionHeight - 0.1)
+        self.height = max(mapHeight[2]  * 977.5/(255*8), collisionHeight - 0.1)
         
         if not self.jumpTime:
             self.player.position[1] = self.height
@@ -1877,6 +1879,13 @@ class game:
                     result = OPEN_MENU
             elif event.type == pygame.MOUSEWHEEL:
                 self.scene.player.camera.zoom -= event.y
+            if event.type == pygame.FINGERDOWN:
+                x = event.x
+                y = event.y
+                fingers[event.finger_id] = x, y
+                print(x, y)
+            if event.type == pygame.FINGERUP:
+                fingers.pop(event.finger_id, None)
         
         self.calculate_framerate()
         self.handle_keys()
@@ -1899,6 +1908,9 @@ class game:
         if keys[input_map["right"]]:     dPos[0] -= 1
         if keys[input_map["jump"]]:      self.jump = True
         sprint = keys[input_map["sprint"]]
+
+        if fingers.values():
+            dPos += fingers.values()
         
         #the jump code is an ungodly mess, dont touch it if not needed
         if self.jump: self.jump = self.scene.jump(self.time)
