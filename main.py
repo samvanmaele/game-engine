@@ -7,7 +7,8 @@
 #  "pygame",
 #  "zengl",
 #  "marshmallow",
-#  "PIL"
+#  "PIL",
+#  "PyOpenGL"
 # ]
 # ///
 
@@ -17,6 +18,7 @@ import asyncio
 import pygame
 import zengl
 import sys
+import platform
 import time
 
 HEIGHT, WIDTH = 1080, 1920
@@ -318,11 +320,9 @@ def shader2Danitex(vertexBuffer, texBuffer, texture, frameAmount):
 LIGHTING = ctx.buffer(size= 64)
 VIEW = ctx.buffer(size= 64)
 
-# 0 = no shadow
-# 1 = single shadow drawcall per frame, no player shadows
+# 0 = no shadows
+# 1 = single shadow drawcall per frame, no moving shadows
 # 2 = shadow drawcall per entity, moving shadows
-
-import platform
 
 if hasattr(platform, "window") and platform.window.mobile_check():
     DYNAMIC_SHADOWS = 0
@@ -410,7 +410,7 @@ if DYNAMIC_SHADOWS:
                 {
                     vec2 TexCoords = (vpos.xz + ofset)/2000.0 + 0.5;
                     vec2 rawHeight = texture(heightmap, TexCoords).bg;
-                    float height = (rawHeight.x + rawHeight.y / 256.0) * (31875.0/32.0);
+                    float height = (rawHeight.x + rawHeight.y / 256.0) * 977.7;
 
                     vec3 pos = vpos + vec3(ofset.x, height, ofset.y);
                     gl_Position = LSM[gl_InstanceID] * model * vec4(pos, 1);
@@ -833,7 +833,7 @@ if DYNAMIC_SHADOWS:
                 {
                     TexCoords = (vpos.xz + ofset)/2000.0 + 0.5;
                     vec2 rawHeight = texture(heightmap, TexCoords).bg;
-                    float height = (rawHeight.x + rawHeight.y / 256.0) * (31875.0/32.0);
+                    float height = (rawHeight.x + rawHeight.y / 256.0) * 977.7;
 
                     fragPos = vpos + vec3(ofset.x, height, ofset.y);
                     fragNorm = normalize(texture(normmap, TexCoords).rbg * 2.0 - 1.0);
@@ -1230,7 +1230,7 @@ else:
                 {
                     TexCoords = (vpos.xz + ofset)/2000.0 + 0.5;
                     vec2 rawHeight = texture(heightmap, TexCoords).bg;
-                    float height = (rawHeight.x + rawHeight.y / 256.0) * (31875.0/32.0);
+                    float height = (rawHeight.x + rawHeight.y / 256.0) * 977.7;
 
                     fragPos = vpos + vec3(ofset.x, height, ofset.y);
                     fragNorm = normalize(texture(normmap, TexCoords).rbg * 2.0 - 1.0);
@@ -1641,19 +1641,19 @@ class scene:
         for uniform in self.moveTerrainUniforms:
             uniform[:] = np.ascontiguousarray([np.round(pos / 5) * 5], 'f').data.cast('B')
         
-        pos = [int(i * 5/2 + 2500) for i in pos]
+        pos = [int(i * 4096/2000 + 2048) for i in pos]
 
         mapHeight = [self.heightmap.pixels.getpixel([pos[0] + x, pos[1] + y]) for x, y in [(0, -1), (-1, 0), (0, 0), (1, 0), (0, 1)]]
-        mapHeight = [b * 8 + g * 8/256 for r, g, b, a in mapHeight]
+        mapHeight = [b * 8 + g * 0.03125 for r, g, b, a in mapHeight]
 
         angle = [np.arctan(mapHeight[x] - mapHeight[y]) for x, y in [(0, 2), (2, 4), (2, 1), (3, 2)]]
         
         roll = (angle[0] + angle[1]) * 0.5
         pitch = (angle[2] + angle[3]) * 0.5
-        
+
         self.player.eulers[0] = pitch
         self.player.eulers[1] = roll
-        self.height = max(mapHeight[2] * 125/256, collisionHeight - 0.1)
+        self.height = max(mapHeight[2] * 977.7/(256*8), collisionHeight - 0.1)
         
         if not self.jumpTime:
             self.player.position[1] = self.height
@@ -2184,5 +2184,12 @@ async def main():
             result = CONTINUE
         await asyncio.sleep(0)
     myApp.quit()
+
+#import cv2
+#img = cv2.imread("gfx/map8.png", cv2.IMREAD_UNCHANGED)
+#pixels = cv2.cvtColor(img, cv2.COLOR_BGRA2RGBA)
+#*size, channels = pixels.shape
+#newpixels = np.array([[[r//256, r%256, 0, 255] for r, g, b, a in row] for row in pixels])
+#cv2.imwrite("gfx/map8RG.png", newpixels)
 
 asyncio.run(main())
