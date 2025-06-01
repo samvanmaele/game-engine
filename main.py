@@ -7,8 +7,7 @@
 #  "pygame",
 #  "zengl",
 #  "marshmallow",
-#  "PIL",
-#  "PyOpenGL"
+#  "PIL"
 # ]
 # ///
 
@@ -1870,6 +1869,7 @@ class game:
     def gameLoop(self):
         
         result = CONTINUE
+        x, y = 0, 0
         
         for event in pygame.event.get():
             if event.type == pygame.QUIT:
@@ -1882,13 +1882,12 @@ class game:
             if event.type == pygame.FINGERDOWN:
                 x = event.x
                 y = event.y
-                fingers[event.finger_id] = x, y
                 print(x, y)
             if event.type == pygame.FINGERUP:
                 fingers.pop(event.finger_id, None)
         
         self.calculate_framerate()
-        self.handle_keys()
+        self.handle_keys(x, y)
         self.handle_mouse()
         
         self.scene.player.update()
@@ -1896,9 +1895,9 @@ class game:
         
         return result
 
-    def handle_keys(self):
+    def handle_keys(self, x, y):
 
-        dPos = np.zeros(2)
+        dPos = np.array([x, y], dtype= np.float32)
         keys = pygame.key.get_pressed()
 
         #this method makes it so holding multible keys doesnt prioritize the first one in the row
@@ -1908,9 +1907,6 @@ class game:
         if keys[input_map["right"]]:     dPos[0] -= 1
         if keys[input_map["jump"]]:      self.jump = True
         sprint = keys[input_map["sprint"]]
-
-        if fingers.values():
-            dPos += fingers.values()
         
         #the jump code is an ungodly mess, dont touch it if not needed
         if self.jump: self.jump = self.scene.jump(self.time)
