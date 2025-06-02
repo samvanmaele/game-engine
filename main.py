@@ -20,7 +20,15 @@ import sys
 import platform
 import time
 
-HEIGHT, WIDTH = 1080, 1920
+
+if hasattr(platform, "window") and platform.window.touch:
+    DYNAMIC_SHADOWS = 0
+    HEIGHT, WIDTH = 720, 1280
+else:
+    DYNAMIC_SHADOWS = 2
+    HEIGHT, WIDTH = 1080, 1920
+
+print(platform)
 
 pygame.init()
 
@@ -324,11 +332,6 @@ VIEW = ctx.buffer(size= 64)
 # 0 = no shadows
 # 1 = single shadow drawcall per frame, no moving shadows
 # 2 = shadow drawcall per entity, moving shadows
-
-if hasattr(platform, "window") and platform.window.mobile_check():
-    DYNAMIC_SHADOWS = 0
-else:
-    DYNAMIC_SHADOWS = 2
 
 if DYNAMIC_SHADOWS:
     #depthshaders for shadowmapping
