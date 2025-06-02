@@ -21,7 +21,8 @@ import platform
 import time
 
 
-if hasattr(platform, "window") and platform.window.touch:
+if hasattr(platform, "window"):
+    print(platform.window.touch)
     DYNAMIC_SHADOWS = 0
     HEIGHT, WIDTH = 720, 1280
 else:
