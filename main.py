@@ -20,26 +20,15 @@ import sys
 import platform
 import time
 
-
-if hasattr(platform, "window"):
-
-    if hasattr(platform.window, "input_providers"):
-        input_sources = platform.window.input_providers
-        has_touch = any("touch" in str(source).lower() for source in input_sources)
-        if has_touch:
-            print("Touchscreen detected!")
-        
-            DYNAMIC_SHADOWS = 0
-            HEIGHT, WIDTH = 720, 1280
-        else:
-            DYNAMIC_SHADOWS = 2
-            HEIGHT, WIDTH = 1080, 1920
-
+if hasattr(platform, "window") and platform.window.mobile_check():
+    DYNAMIC_SHADOWS = 0
+    HEIGHT, WIDTH = 720, 1280
+elif hasattr(platform, "window") and platform.window.mobile_tablet():
+    DYNAMIC_SHADOWS = 0
+    HEIGHT, WIDTH = 1080, 1920
 else:
     DYNAMIC_SHADOWS = 2
     HEIGHT, WIDTH = 1080, 1920
-
-print(platform)
 
 pygame.init()
 
