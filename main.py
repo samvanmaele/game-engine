@@ -23,16 +23,27 @@ import time
 if hasattr(platform, "window") and platform.window.mobile_check():
     DYNAMIC_SHADOWS = 0
     HEIGHT, WIDTH = 720, 1280
+    touchscreen = True
+
 elif hasattr(platform, "window") and platform.window.mobile_tablet():
     DYNAMIC_SHADOWS = 0
     HEIGHT, WIDTH = 1080, 1920
+    touchscreen = True
+
 else:
     DYNAMIC_SHADOWS = 2
     HEIGHT, WIDTH = 1080, 1920
+    touchscreen = False
+
+aspectRat = HEIGHT/WIDTH
 
 pygame.init()
 
-#pygame.mixer.init()
+touchscreenvertices = np.array([[-0.8, -0.8], [-0.8, -0.1], [0.7 * aspectRat - 0.8, -0.8], [0.7 * aspectRat - 0.8, -0.1]])
+joystickCorners = np.array([[0.1, 0.55], [0.1, 0.9], [0.35 * aspectRat + 0.1, 0.55], [0.35 * aspectRat + 0.1, 0.9]])
+joystickCenter = [0.175 * aspectRat + 0.1, 0.725]
+
+pygame.mixer.init()
 #pygame.mixer.music.set_volume(0.2)
 #audio1 = pygame.mixer.music.load("sfx/NeuroSama-Goddess.ogg")
 #pygame.mixer.music.play(-1)
@@ -225,7 +236,7 @@ def get_view(forwards, up, right, position):
 
 nearplane, farplane = 0.1, 1000
 depthlayers = [nearplane, farplane/50, farplane/10, farplane/5, farplane]
-projection = create_perspective_projection_from_bounds(-0.1, 0.1, -0.1*HEIGHT/WIDTH, 0.1*HEIGHT/WIDTH, nearplane, farplane)
+projection = create_perspective_projection_from_bounds(-0.1, 0.1, -0.1*aspectRat, 0.1*aspectRat, nearplane, farplane)
 
 def shader2D(vertexBuffer, texBuffer, texture):
     
@@ -1513,6 +1524,8 @@ class scene:
     def createEntities(self, sceneNr):
 
         if sceneNr == 0:
+
+            if touchscreen: self.UI = self.createTouchscreenButtons()
             
             self.light = pointLight([-2000, 2000, -2000], [-1/3*np.pi, -1/10*np.pi, 0], [218, 203, 125], 10000)
 
@@ -1576,6 +1589,14 @@ class scene:
                                                                                                                                                  material("models/V-nexus/vedal's_house/vedals_house.png").img,
                                                                                                                                                  material("models/V-nexus/vedal's_house/vedals_house.png").img])],
                 }
+    
+    def createTouchscreenButtons(self):
+
+        texcoords = [[0, 0], [0, 1], [1, 0], [1, 1]]
+        vertexBuffer = np.array([touchscreenvertices[0], touchscreenvertices[2], touchscreenvertices[1], touchscreenvertices[3], touchscreenvertices[1], touchscreenvertices[2]], dtype=np.float32)
+        texBuffer = np.array([texcoords[0], texcoords[2], texcoords[1], texcoords[3], texcoords[1], texcoords[2]], dtype=np.float32)
+
+        return shader2D(vertexBuffer, texBuffer, material("gfx/floor.png").img)
 
     def setDrawFunc(self):
 
@@ -1619,7 +1640,8 @@ class scene:
             self.jumpStartHeight = self.height
         
         t = (jump - self.jumpTime)
-        jumpheight = 0.005*t - 0.0000049 * (t**2)
+        #jumpheight = 0.005*t - 0.0000049 * (t**2)
+        jumpheight = 0.00767*t - 0.0000049 * (t**2)
         
         if jumpheight < (self.height - self.jumpStartHeight):
             self.player.position[1] = self.height
@@ -1630,8 +1652,6 @@ class scene:
             return True
     
     def movePlayer(self, dPos, sprint, frametime):
-        
-        if dPos[0] and dPos[1]: dPos *= 0.7071
         
         movement = (dPos[0]*self.player.right + dPos[1]*self.player.forwards) * (1 + sprint)
         movement, collisionHeight = self.checkCollision(movement, self.player.position)
@@ -1744,6 +1764,8 @@ class scene:
         ctx.new_frame()
         image.clear()
         depth.clear()
+
+        if touchscreen: self.UI.render()
         
         cam = self.player.camera
         view = cam.getViewTransform()
@@ -1872,25 +1894,30 @@ class game:
     def gameLoop(self):
         
         result = CONTINUE
-        x, y = 0, 0
-        
+
         for event in pygame.event.get():
+
             if event.type == pygame.QUIT:
                 result = EXIT
             elif event.type == pygame.KEYDOWN:
                 if event.key == input_map["escape"]:
                     result = OPEN_MENU
+            
             elif event.type == pygame.MOUSEWHEEL:
                 self.scene.player.camera.zoom -= event.y
-            if event.type == pygame.FINGERDOWN:
-                x = event.x
-                y = event.y
-                print(x, y)
-            if event.type == pygame.FINGERUP:
-                fingers.pop(event.finger_id, None)
+            
+            elif event.type == pygame.FINGERDOWN:
+                if joystickCorners[0,0] < event.x < joystickCorners[3,0] and joystickCorners[0,1] < event.y < joystickCorners[3,1] and len(fingers) == 0:
+                    fingers[event.finger_id] = [event.x, event.y]
+            
+            elif event.type == pygame.FINGERMOTION and event.finger_id in fingers:
+                fingers[event.finger_id] = [event.x, event.y]
+            
+            elif event.type == pygame.FINGERUP and event.finger_id in fingers:
+                fingers.pop(event.finger_id)
         
         self.calculate_framerate()
-        self.handle_keys(x, y)
+        self.handle_keys()
         self.handle_mouse()
         
         self.scene.player.update()
@@ -1898,9 +1925,16 @@ class game:
         
         return result
 
-    def handle_keys(self, x, y):
+    def handle_keys(self):
 
-        dPos = np.array([x, y], dtype= np.float32)
+        if len(fingers):
+            pos = next(iter(fingers.values()))
+            dPos = np.array(pos, dtype= np.float32) - joystickCenter
+            dPos /= 0.35/2
+            dPos = -dPos.clip(-1, 1)
+        else:
+            dPos = np.array([0, 0], dtype= np.float32)
+        
         keys = pygame.key.get_pressed()
 
         #this method makes it so holding multible keys doesnt prioritize the first one in the row
@@ -1910,6 +1944,11 @@ class game:
         if keys[input_map["right"]]:     dPos[0] -= 1
         if keys[input_map["jump"]]:      self.jump = True
         sprint = keys[input_map["sprint"]]
+
+        veclen = np.linalg.norm(dPos)
+
+        if veclen > 1:
+            dPos /= veclen
         
         #the jump code is an ungodly mess, dont touch it if not needed
         if self.jump: self.jump = self.scene.jump(self.time)
@@ -2105,7 +2144,7 @@ class material:
     
     def __init__(self, filepath):
         
-        self.pixels = Image.open(filepath)
+        self.pixels = Image.open(filepath).convert('RGBA')
         self.img = ctx.image(self.pixels.size, 'rgba8unorm',  np.array(self.pixels))
 
 class gltfMesh:
@@ -2196,6 +2235,7 @@ async def main():
         await asyncio.sleep(0)
     myApp.quit()
 
+#convert 16 bit 1 channel to 8 bit 2 channel
 #import cv2
 #img = cv2.imread("gfx/map8.png", cv2.IMREAD_UNCHANGED)
 #pixels = cv2.cvtColor(img, cv2.COLOR_BGRA2RGBA)
