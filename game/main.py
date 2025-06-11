@@ -24,16 +24,19 @@ if hasattr(platform, "window") and platform.window.mobile_check():
     DYNAMIC_SHADOWS = 0
     HEIGHT, WIDTH = 720, 1280
     touchscreen = True
+    shellGrass = False
 
 elif hasattr(platform, "window") and platform.window.mobile_tablet():
     DYNAMIC_SHADOWS = 0
     HEIGHT, WIDTH = 1080, 1920
     touchscreen = True
+    shellGrass = False
 
 else:
     DYNAMIC_SHADOWS = 2
     HEIGHT, WIDTH = 1080, 1920
     touchscreen = False
+    shellGrass = True
 
 aspectRat = HEIGHT/WIDTH
 
@@ -63,7 +66,6 @@ ctx = zengl.context()
 size = pygame.display.get_window_size()
 image = ctx.image(size, 'rgba8unorm', samples= 4)
 depth = ctx.image(size, 'depth24plus', samples= 4)
-lightdepth = ctx.image((4096, 4096), 'rgba32float')
 output = ctx.image(size, 'rgba8unorm')
 
 fingers = {}
@@ -103,8 +105,6 @@ ENTITY_TYPE = {"player": 0,
                }
 
 #####################################################################################
-
-#pyrr functions that i copied cuz import pyrr causes long load times in browsers
 
 def create_perspective_projection_from_bounds(left, right, bottom, top, near, far, dtype= np.float32):
     C = -(far + near) / (far - near)
@@ -337,8 +337,9 @@ def shader2Danitex(vertexBuffer, texBuffer, texture, frameAmount):
         framebuffer= [image, depth]
     )
 
-LIGHTING = ctx.buffer(size= 64)
+LIGHTING = ctx.buffer(size= 48)
 VIEW = ctx.buffer(size= 64)
+CAMPOS = ctx.buffer(size = 16)
 
 # 0 = no shadows
 # 1 = single shadow drawcall per frame, no moving shadows
@@ -347,6 +348,8 @@ VIEW = ctx.buffer(size= 64)
 if DYNAMIC_SHADOWS:
     #depthshaders for shadowmapping
     LSM = ctx.buffer(size= 256)
+    lightdepth = ctx.image((2048, 2048), 'rgba32float')
+
     def shaderDepth(vertexBuffer):
 
         return ctx.pipeline(
@@ -455,7 +458,7 @@ if DYNAMIC_SHADOWS:
             layout=[{'name': 'GLSM', 'binding': 0},
                     {'name': 'heightmap', 'binding': 1}],
             resources=[{'type': 'uniform_buffer', 'binding': 0, 'buffer': LSM},
-                    {'type': 'sampler', 'binding': 1, 'image': depthmap, 'wrap_x': 'clamp_to_edge', 'wrap_y': 'clamp_to_edge', 'min_filter': 'nearest', 'mag_filter': 'nearest'}],
+                       {'type': 'sampler', 'binding': 1, 'image': depthmap, 'wrap_x': 'clamp_to_edge', 'wrap_y': 'clamp_to_edge', 'min_filter': 'nearest', 'mag_filter': 'nearest'}],
 
             vertex_buffers= zengl.bind(ctx.buffer(vertexBuffer), "3f", 0),
             
@@ -525,10 +528,13 @@ if DYNAMIC_SHADOWS:
                 in float viewPosZ;
 
                 layout (std140) uniform lighting {
-                    vec3 camPos;
                     vec3 lightposition[1];
                     vec3 lightcolor[1];
                     float lightstrength[1];
+                };
+
+                layout (std140) uniform campos {
+                    vec3 camPos;
                 };
 
                 uniform sampler2D material;
@@ -611,13 +617,15 @@ if DYNAMIC_SHADOWS:
             layout=[{'name': 'GLSM', 'binding': 0},
                     {'name': 'VIEW', 'binding': 1},
                     {'name': 'lighting', 'binding': 2},
-                    {'name': 'material', 'binding': 3},
-                    {'name': 'lightdepth', 'binding': 4}],
+                    {'name': 'campos', 'binding': 3},
+                    {'name': 'material', 'binding': 4},
+                    {'name': 'lightdepth', 'binding': 5}],
             resources=[{'type': 'uniform_buffer', 'binding': 0, 'buffer': LSM},
                     {'type': 'uniform_buffer', 'binding': 1, 'buffer': VIEW},
                     {'type': 'uniform_buffer', 'binding': 2, 'buffer': LIGHTING},
-                    {'type': 'sampler', 'binding': 3, 'image': texture, 'wrap_x': 'clamp_to_edge', 'wrap_y': 'clamp_to_edge', 'min_filter': 'nearest', 'mag_filter': 'nearest'},
-                    {'type': 'sampler', 'binding': 4, 'image': lightdepth, 'wrap_x': 'clamp_to_edge', 'wrap_y': 'clamp_to_edge', 'min_filter': 'nearest', 'mag_filter': 'nearest'}],
+                    {'type': 'uniform_buffer', 'binding': 3, 'buffer': CAMPOS},
+                    {'type': 'sampler', 'binding': 4, 'image': texture, 'wrap_x': 'clamp_to_edge', 'wrap_y': 'clamp_to_edge', 'min_filter': 'nearest', 'mag_filter': 'nearest'},
+                    {'type': 'sampler', 'binding': 5, 'image': lightdepth, 'wrap_x': 'clamp_to_edge', 'wrap_y': 'clamp_to_edge', 'min_filter': 'nearest', 'mag_filter': 'nearest'}],
             
             vertex_buffers= [*zengl.bind(ctx.buffer(vertexBuffer), "3f", 0),
                             *zengl.bind(ctx.buffer(normBuffer), "3f", 1),
@@ -708,10 +716,13 @@ if DYNAMIC_SHADOWS:
                 in float viewPosZ;
 
                 layout (std140) uniform lighting {
-                    vec3 camPos;
                     vec3 lightposition[1];
                     vec3 lightcolor[1];
                     float lightstrength[1];
+                };
+
+                layout (std140) uniform campos {
+                    vec3 camPos;
                 };
 
                 uniform sampler2D material;
@@ -795,13 +806,15 @@ if DYNAMIC_SHADOWS:
             layout=[{'name': 'GLSM', 'binding': 0},
                     {'name': 'VIEW', 'binding': 1},
                     {'name': 'lighting', 'binding': 2},
-                    {'name': 'material', 'binding': 3},
-                    {'name': 'lightdepth', 'binding': 4}],
+                    {'name': 'campos', 'binding': 3},
+                    {'name': 'material', 'binding': 4},
+                    {'name': 'lightdepth', 'binding': 5}],
             resources=[{'type': 'uniform_buffer', 'binding': 0, 'buffer': LSM},
-                    {'type': 'uniform_buffer', 'binding': 1, 'buffer': VIEW},
-                    {'type': 'uniform_buffer', 'binding': 2, 'buffer': LIGHTING},
-                    {'type': 'sampler', 'binding': 3, 'image': texture, 'wrap_x': 'clamp_to_edge', 'wrap_y': 'clamp_to_edge', 'min_filter': 'nearest', 'mag_filter': 'nearest'},
-                    {'type': 'sampler', 'binding': 4, 'image': lightdepth, 'wrap_x': 'clamp_to_edge', 'wrap_y': 'clamp_to_edge', 'min_filter': 'nearest', 'mag_filter': 'nearest'}],
+                       {'type': 'uniform_buffer', 'binding': 1, 'buffer': VIEW},
+                       {'type': 'uniform_buffer', 'binding': 2, 'buffer': LIGHTING},
+                       {'type': 'uniform_buffer', 'binding': 3, 'buffer': CAMPOS},
+                       {'type': 'sampler', 'binding': 4, 'image': texture, 'wrap_x': 'clamp_to_edge', 'wrap_y': 'clamp_to_edge', 'min_filter': 'nearest', 'mag_filter': 'nearest'},
+                       {'type': 'sampler', 'binding': 5, 'image': lightdepth, 'wrap_x': 'clamp_to_edge', 'wrap_y': 'clamp_to_edge', 'min_filter': 'nearest', 'mag_filter': 'nearest'}],
             
             vertex_buffers= [*zengl.bind(ctx.buffer(vertexBuffer), "3f", 0),
                             *zengl.bind(ctx.buffer(normBuffer), "3f", 1),
@@ -874,10 +887,13 @@ if DYNAMIC_SHADOWS:
                 in float viewPosZ;
 
                 layout (std140) uniform lighting {
-                    vec3 camPos;
                     vec3 lightposition[1];
                     vec3 lightcolor[1];
                     float lightstrength[1];
+                };
+
+                layout (std140) uniform campos {
+                    vec3 camPos;
                 };
 
                 uniform sampler2D material;
@@ -919,9 +935,8 @@ if DYNAMIC_SHADOWS:
                     return min(float(shadow)/9.0, 1.0);
                 }
 
-                vec3 calcPointlight(int i)
+                vec3 calcPointlight(int i, vec3 basetex)
                 {
-                    vec3 baseTexture = texture(material, TexCoords).rgb;
                     vec3 result = vec3(0);
                     
                     vec3 relLightPos = lightposition[i] - fragPos;
@@ -935,7 +950,7 @@ if DYNAMIC_SHADOWS:
                     float distsquared = distance * distance;
                     float dotfrag = dot(fragNorm, relLightPos);
 
-                    result += lightval * max(0.0, dotfrag) / distsquared * baseTexture; //diffuse
+                    result += lightval * max(0.0, dotfrag) / distsquared * basetex; //diffuse
                     result += lightval * pow(max(0.0, dot(fragNorm, halfVec)), 32.0) / distsquared; //specular
 
                     float shadow = ShadowCalculation();
@@ -944,9 +959,9 @@ if DYNAMIC_SHADOWS:
                 
                 void main()
                 {
-                    vec4 baseTex = texture(material, TexCoords);
+                    vec4 baseTex = texture(material, 200.0 * TexCoords);
                     vec3 temp = 0.2 * baseTex.rgb; //ambient
-                    temp += calcPointlight(0);
+                    temp += calcPointlight(0, baseTex.rgb);
 
                     color = pow(vec4(temp, baseTex.a), vec4(0.45));
                 }
@@ -960,17 +975,19 @@ if DYNAMIC_SHADOWS:
             layout=[{'name': 'GLSM', 'binding': 0},
                     {'name': 'VIEW', 'binding': 1},
                     {'name': 'lighting', 'binding': 2},
-                    {'name': 'normmap', 'binding': 3},
-                    {'name': 'heightmap', 'binding': 4},
-                    {'name': 'material', 'binding': 5},
-                    {'name': 'lightdepth', 'binding': 6}],
+                    {'name': 'campos', 'binding': 3},
+                    {'name': 'normmap', 'binding': 4},
+                    {'name': 'heightmap', 'binding': 5},
+                    {'name': 'material', 'binding': 6},
+                    {'name': 'lightdepth', 'binding': 7}],
             resources=[{'type': 'uniform_buffer', 'binding': 0, 'buffer': LSM},
                        {'type': 'uniform_buffer', 'binding': 1, 'buffer': VIEW},
                        {'type': 'uniform_buffer', 'binding': 2, 'buffer': LIGHTING},
-                       {'type': 'sampler', 'binding': 3, 'image': normmap, 'wrap_x': 'clamp_to_edge', 'wrap_y': 'clamp_to_edge', 'min_filter': 'nearest', 'mag_filter': 'nearest'},
-                       {'type': 'sampler', 'binding': 4, 'image': depthmap, 'wrap_x': 'clamp_to_edge', 'wrap_y': 'clamp_to_edge', 'min_filter': 'nearest', 'mag_filter': 'nearest'},
-                       {'type': 'sampler', 'binding': 5, 'image': texture, 'wrap_x': 'repeat', 'wrap_y': 'repeat', 'min_filter': 'nearest', 'mag_filter': 'nearest'},
-                       {'type': 'sampler', 'binding': 6, 'image': lightdepth, 'wrap_x': 'clamp_to_edge', 'wrap_y': 'clamp_to_edge', 'min_filter': 'nearest', 'mag_filter': 'nearest'}],
+                       {'type': 'uniform_buffer', 'binding': 3, 'buffer': CAMPOS},
+                       {'type': 'sampler', 'binding': 4, 'image': normmap, 'wrap_x': 'clamp_to_edge', 'wrap_y': 'clamp_to_edge', 'min_filter': 'nearest', 'mag_filter': 'nearest'},
+                       {'type': 'sampler', 'binding': 5, 'image': depthmap, 'wrap_x': 'clamp_to_edge', 'wrap_y': 'clamp_to_edge', 'min_filter': 'nearest', 'mag_filter': 'nearest'},
+                       {'type': 'sampler', 'binding': 6, 'image': texture, 'wrap_x': 'repeat', 'wrap_y': 'repeat', 'min_filter': 'nearest', 'mag_filter': 'nearest'},
+                       {'type': 'sampler', 'binding': 7, 'image': lightdepth, 'wrap_x': 'clamp_to_edge', 'wrap_y': 'clamp_to_edge', 'min_filter': 'nearest', 'mag_filter': 'nearest'}],
             
             vertex_buffers= zengl.bind(ctx.buffer(vertexBuffer), "3f", 0),
             
@@ -1025,10 +1042,13 @@ else:
                 in vec3 fragNorm;
 
                 layout (std140) uniform lighting {
-                    vec3 camPos;
                     vec3 lightposition[1];
                     vec3 lightcolor[1];
                     float lightstrength[1];
+                };
+
+                layout (std140) uniform campos {
+                    vec3 camPos;
                 };
 
                 uniform sampler2D material;
@@ -1073,10 +1093,12 @@ else:
             blend={'enable': True, 'src_color': 'src_alpha', 'dst_color': 'one_minus_src_alpha'},
             layout=[{'name': 'VIEW', 'binding': 0},
                     {'name': 'lighting', 'binding': 1},
-                    {'name': 'material', 'binding': 2}],
+                    {'name': 'campos', 'binding': 2},
+                    {'name': 'material', 'binding': 3}],
             resources=[{'type': 'uniform_buffer', 'binding': 0, 'buffer': VIEW},
                        {'type': 'uniform_buffer', 'binding': 1, 'buffer': LIGHTING},
-                       {'type': 'sampler', 'binding': 2, 'image': texture, 'wrap_x': 'clamp_to_edge', 'wrap_y': 'clamp_to_edge', 'min_filter': 'nearest', 'mag_filter': 'nearest'}],
+                       {'type': 'uniform_buffer', 'binding': 2, 'buffer': CAMPOS},
+                       {'type': 'sampler', 'binding': 3, 'image': texture, 'wrap_x': 'clamp_to_edge', 'wrap_y': 'clamp_to_edge', 'min_filter': 'nearest', 'mag_filter': 'nearest'}],
             
             vertex_buffers= [*zengl.bind(ctx.buffer(vertexBuffer), "3f", 0),
                             *zengl.bind(ctx.buffer(normBuffer), "3f", 1),
@@ -1153,10 +1175,13 @@ else:
                 in vec3 fragNorm;
 
                 layout (std140) uniform lighting {
-                    vec3 camPos;
                     vec3 lightposition[1];
                     vec3 lightcolor[1];
                     float lightstrength[1];
+                };
+
+                layout (std140) uniform campos {
+                    vec3 camPos;
                 };
 
                 uniform sampler2D material;
@@ -1202,10 +1227,12 @@ else:
             blend={'enable': True, 'src_color': 'src_alpha', 'dst_color': 'one_minus_src_alpha'},
             layout=[{'name': 'VIEW', 'binding': 0},
                     {'name': 'lighting', 'binding': 1},
-                    {'name': 'material', 'binding': 2}],
+                    {'name': 'campos', 'binding': 2},
+                    {'name': 'material', 'binding': 3}],
             resources=[{'type': 'uniform_buffer', 'binding': 0, 'buffer': VIEW},
                        {'type': 'uniform_buffer', 'binding': 1, 'buffer': LIGHTING},
-                       {'type': 'sampler', 'binding': 2, 'image': texture, 'wrap_x': 'clamp_to_edge', 'wrap_y': 'clamp_to_edge', 'min_filter': 'nearest', 'mag_filter': 'nearest'}],
+                       {'type': 'uniform_buffer', 'binding': 2, 'buffer': CAMPOS},
+                       {'type': 'sampler', 'binding': 3, 'image': texture, 'wrap_x': 'clamp_to_edge', 'wrap_y': 'clamp_to_edge', 'min_filter': 'nearest', 'mag_filter': 'nearest'}],
             
             vertex_buffers= [*zengl.bind(ctx.buffer(vertexBuffer), "3f", 0),
                             *zengl.bind(ctx.buffer(normBuffer), "3f", 1),
@@ -1266,19 +1293,21 @@ else:
                 in float viewPosZ;
 
                 layout (std140) uniform lighting {
-                    vec3 camPos;
                     vec3 lightposition[1];
                     vec3 lightcolor[1];
                     float lightstrength[1];
+                };
+
+                layout (std140) uniform campos {
+                    vec3 camPos;
                 };
 
                 uniform sampler2D material;
                 
                 layout (location = 0) out vec4 color;
                 
-                vec3 calcPointlight(int i)
+                vec3 calcPointlight(int i, vec3 baseTex)
                 {
-                    vec3 baseTexture = texture(material, TexCoords).rgb;
                     vec3 result = vec3(0);
                     
                     vec3 relLightPos = lightposition[i] - fragPos;
@@ -1292,7 +1321,7 @@ else:
                     float distsquared = distance * distance;
                     float dotfrag = dot(fragNorm, relLightPos);
 
-                    result += lightval * max(0.0, dotfrag) / distsquared * baseTexture; //diffuse
+                    result += lightval * max(0.0, dotfrag) / distsquared * baseTex; //diffuse
                     result += lightval * pow(max(0.0, dot(fragNorm, halfVec)), 32.0) / distsquared; //specular
 
                     return result;
@@ -1300,9 +1329,9 @@ else:
                 
                 void main()
                 {
-                    vec4 baseTex = texture(material, TexCoords);
+                    vec4 baseTex = texture(material, 200.0 * TexCoords);
                     vec3 temp = 0.2 * baseTex.rgb; //ambient
-                    temp += calcPointlight(0);
+                    temp += calcPointlight(0, baseTex.rgb);
 
                     color = pow(vec4(temp, baseTex.a), vec4(0.45));
                 }
@@ -1314,18 +1343,204 @@ else:
             blend={'enable': True, 'src_color': 'src_alpha', 'dst_color': 'one_minus_src_alpha'},
             layout=[{'name': 'VIEW', 'binding': 0},
                     {'name': 'lighting', 'binding': 1},
-                    {'name': 'normmap', 'binding': 2},
-                    {'name': 'heightmap', 'binding': 3},
-                    {'name': 'material', 'binding': 4}],
+                    {'name': 'campos', 'binding': 2},
+                    {'name': 'normmap', 'binding': 3},
+                    {'name': 'heightmap', 'binding': 4},
+                    {'name': 'material', 'binding': 5}],
             resources=[{'type': 'uniform_buffer', 'binding': 0, 'buffer': VIEW},
                        {'type': 'uniform_buffer', 'binding': 1, 'buffer': LIGHTING},
-                       {'type': 'sampler', 'binding': 2, 'image': normmap, 'wrap_x': 'clamp_to_edge', 'wrap_y': 'clamp_to_edge', 'min_filter': 'nearest', 'mag_filter': 'nearest'},
-                       {'type': 'sampler', 'binding': 3, 'image': depthmap, 'wrap_x': 'clamp_to_edge', 'wrap_y': 'clamp_to_edge', 'min_filter': 'nearest', 'mag_filter': 'nearest'},
-                       {'type': 'sampler', 'binding': 4, 'image': texture, 'wrap_x': 'repeat', 'wrap_y': 'repeat', 'min_filter': 'nearest', 'mag_filter': 'nearest'}],
+                       {'type': 'uniform_buffer', 'binding': 2, 'buffer': CAMPOS},
+                       {'type': 'sampler', 'binding': 3, 'image': normmap, 'wrap_x': 'clamp_to_edge', 'wrap_y': 'clamp_to_edge', 'min_filter': 'nearest', 'mag_filter': 'nearest'},
+                       {'type': 'sampler', 'binding': 4, 'image': depthmap, 'wrap_x': 'clamp_to_edge', 'wrap_y': 'clamp_to_edge', 'min_filter': 'nearest', 'mag_filter': 'nearest'},
+                       {'type': 'sampler', 'binding': 5, 'image': texture, 'wrap_x': 'repeat', 'wrap_y': 'repeat', 'min_filter': 'nearest', 'mag_filter': 'nearest'}],
             
             vertex_buffers= zengl.bind(ctx.buffer(vertexBuffer), "3f", 0),
             
             vertex_count= len(vertexBuffer),
+            cull_face= "back",
+            topology= "triangles",
+            framebuffer= [image, depth]
+            )
+
+if shellGrass:
+
+    def shaderShellGrass(vertexBuffer, normmap, depthmap, hashmap):
+
+        return ctx.pipeline(
+            vertex_shader="""
+                #version 300 es
+                precision highp float;
+                
+                layout(location = 0) in vec3 vpos;
+
+                layout (std140) uniform GLSM
+                {
+                    mat4 LSM[4];
+                };
+
+                layout (std140) uniform VIEW
+                {
+                    mat4 view;
+                };
+
+                uniform mat4 projection;
+                uniform sampler2D normmap;
+                uniform sampler2D heightmap;
+                uniform vec2 ofset;
+
+                out vec2 TexCoords;
+                out vec3 fragPos;
+                out vec3 fragNorm;
+                out vec4 lightSpace[4];
+                out float viewPosZ;
+                out float instanceHeight;
+                out vec3 camPos;
+
+                void main()
+                {
+                    instanceHeight = pow(float(gl_InstanceID) * 0.25, 1.5);
+
+                    TexCoords = (vpos.xz + ofset)/2000.0 + 0.5;
+                    vec2 rawHeight = texture(heightmap, TexCoords).bg;
+
+                    float height = (rawHeight.x + rawHeight.y / 256.0) * 977.5 + instanceHeight * 0.3 + 0.01;
+
+                    fragPos = vpos + vec3(ofset.x, height, ofset.y);
+                    fragNorm = normalize(texture(normmap, TexCoords).rbg * 2.0 - 1.0);
+                    fragNorm.b = -fragNorm.b;
+
+                    for (int i = 0; i < 4; i++) {
+                        lightSpace[i] = LSM[i] * vec4(fragPos, 1);
+                    }
+
+                    vec4 viewPos = view * vec4(fragPos, 1);
+                    viewPosZ = viewPos.z;
+                    camPos = view[3].xyz;
+                    gl_Position = projection * viewPos;
+                }
+            """,
+            fragment_shader="""
+                #version 300 es
+                precision highp float;
+                
+                in vec2 TexCoords;
+                in vec3 fragPos;
+                in vec3 fragNorm;
+                in vec4 lightSpace[4];
+                in float viewPosZ;
+                in float instanceHeight;
+                in vec3 camPos;
+
+                layout (std140) uniform lighting {
+                    vec3 lightposition[1];
+                    vec3 lightcolor[1];
+                    float lightstrength[1];
+                };
+
+                uniform sampler2D hashmap;
+                uniform highp sampler2D lightdepth;
+                uniform float cascadeClip[3];
+                
+                layout (location = 0) out vec4 color;
+                
+                float ShadowCalculation()
+                {
+                    int cascadeIndex = 3;
+                    for (int i = 0 ; i < 3 ; i++)
+                    {
+                        if (-viewPosZ <= cascadeClip[i])
+                        {
+                            cascadeIndex = i;
+                            break;
+                        }
+                    }
+                    
+                    vec4 space = lightSpace[cascadeIndex];
+                    vec3 projCoords = space.xyz / space.w;
+                    projCoords = projCoords * 0.5 + 0.5;
+
+                    int shadow = 0;
+                    vec2 texelSize = 1.0 / vec2(textureSize(lightdepth, 0));
+                    for (int x = -1; x <= 1; ++x)
+                    {
+                        for (int y = -1; y <= 1; ++y)
+                        {
+                            vec2 local = projCoords.xy + vec2(x, y) * texelSize;
+                            shadow += any(lessThan(vec2(0.5), abs(local - 0.5))) ? 1 : 0;
+
+                            float pcfDepth = 1.0 - texture(lightdepth, local)[cascadeIndex]; 
+                            shadow += (pcfDepth + 0.00005) > projCoords.z ? 1 : 0;
+                        }
+                    }
+
+                    return min(float(shadow)/9.0, 1.0);
+                }
+
+                vec3 calcPointlight(int i, vec3 basetex)
+                {
+                    vec3 result = vec3(0);
+                    
+                    vec3 relLightPos = lightposition[i] - fragPos;
+                    float distance = length(relLightPos);
+                    relLightPos = normalize(relLightPos);
+                    
+                    vec3 relCamPos = normalize(camPos - fragPos);
+                    vec3 halfVec = normalize(relLightPos + relCamPos);
+
+                    vec3 lightval = lightcolor[i] * lightstrength[i];
+                    float distsquared = distance * distance;
+                    float dotfrag = dot(fragNorm, relLightPos);
+
+                    result += lightval * max(0.0, dotfrag) / distsquared * basetex; //diffuse
+                    result += lightval * pow(max(0.0, dot(fragNorm, halfVec)), 32.0) / distsquared; //specular
+
+                    result *= ShadowCalculation();
+
+                    return result;
+                }
+                
+                void main()
+                {   
+                    vec2 localTex = TexCoords * 20.0;
+
+                    // Blade height and blend
+                    float fragHeight = texture(hashmap, localTex).r;
+
+                    if (instanceHeight > fragHeight * 1.1)
+                        discard;
+
+                    // Color & lighting
+                    vec3 baseColor = mix(vec3(0, 0.1, 0), vec3(0.0, 0.3, 0.0), instanceHeight);
+                    baseColor += calcPointlight(0, baseColor);
+
+                    color = pow(vec4(baseColor, 1.0 + viewPosZ * 0.02), vec4(0.45));
+                }
+            """,
+            
+            uniforms={'projection': projection.flatten(),
+                      'ofset': [0, 0],
+                      'cascadeClip': depthlayers[1:4]},
+            
+            blend={'enable': True, 'src_color': 'src_alpha', 'dst_color': 'one_minus_src_alpha'},
+            layout=[{'name': 'GLSM', 'binding': 0},
+                    {'name': 'VIEW', 'binding': 1},
+                    {'name': 'lighting', 'binding': 2},
+                    {'name': 'normmap', 'binding': 3},
+                    {'name': 'heightmap', 'binding': 4},
+                    {'name': 'hashmap', 'binding': 5},
+                    {'name': 'lightdepth', 'binding': 6}],
+            resources=[{'type': 'uniform_buffer', 'binding': 0, 'buffer': LSM},
+                       {'type': 'uniform_buffer', 'binding': 1, 'buffer': VIEW},
+                       {'type': 'uniform_buffer', 'binding': 2, 'buffer': LIGHTING},
+                       {'type': 'sampler', 'binding': 3, 'image': normmap, 'wrap_x': 'clamp_to_edge', 'wrap_y': 'clamp_to_edge', 'min_filter': 'nearest', 'mag_filter': 'nearest'},
+                       {'type': 'sampler', 'binding': 4, 'image': depthmap, 'wrap_x': 'clamp_to_edge', 'wrap_y': 'clamp_to_edge', 'min_filter': 'nearest', 'mag_filter': 'nearest'},
+                       {'type': 'sampler', 'binding': 5, 'image': hashmap, 'wrap_x': 'repeat', 'wrap_y': 'repeat', 'min_filter': 'nearest', 'mag_filter': 'nearest'},
+                       {'type': 'sampler', 'binding': 6, 'image': lightdepth, 'wrap_x': 'clamp_to_edge', 'wrap_y': 'clamp_to_edge', 'min_filter': 'nearest', 'mag_filter': 'nearest'}],
+            
+            vertex_buffers= zengl.bind(ctx.buffer(vertexBuffer), "3f", 0),
+            
+            vertex_count= len(vertexBuffer),
+            instance_count= 4,
             cull_face= "back",
             topology= "triangles",
             framebuffer= [image, depth]
@@ -1409,9 +1624,9 @@ class player(entity):
         super().__init__(position, 0, eulers)
         self.camera = camera(self.position, camEulers, camZoom)
     
-    def update(self):
+    def update(self, dEulers= [0,0,0]):
         
-        cosX, sinX = self.camera.update(self.position)
+        cosX, sinX = self.camera.update(self.position, dEulers)
 
         self.forwards = np.array((cosX, 0, -sinX))
         self.right = np.array((-sinX, 0, -cosX))
@@ -1444,10 +1659,14 @@ class camera(entity):
         
         super().__init__(position, 0, eulers)
         self.zoom = camZoom
-        self.update(position)
+        self.update(position, np.array([0,0,0]))
         
-    def update(self, pos):
+    def update(self, pos, dEulers):
         
+        self.eulers += dEulers
+        self.eulers[0] %= 2*np.pi
+        self.eulers[1] = min(1.5, max(-1.5, self.eulers[1]))
+
         angleX = self.eulers[0]
         angleY = self.eulers[1]
         
@@ -1463,25 +1682,14 @@ class camera(entity):
         
         self.center = pos
         self.position = self.center - self.zoom * self.forwards
-        
+        CAMPOS.write(self.position)
+
+        self.view = get_view(self.forwards, self.up, self.right, self.position)
+        VIEW.write(self.view)
+
         self.makeFrustum()
         
         return (cosX, sinX)
-
-    def getViewTransform(self):
-        
-        return get_view(self.forwards, self.up, self.right, self.position)
-    
-    def getYawMat(self):
-        
-        return get_view(self.forwards, (0, 1, 0), self.right, self.position)
-    
-    def spin(self, dEulers):
-
-        self.eulers += dEulers
-
-        self.eulers[0] %= 2*np.pi
-        self.eulers[1] = min(1.5, max(-1.5, self.eulers[1]))
 
     def makeFrustum(self):
         
@@ -1495,7 +1703,6 @@ class scene:
         self.player = player(playerPos, playerEul, camEul, camZoom)
         self.jumpTime = 0
         self.height = 700
-        self.heightmap = material("gfx/map8RG.png")
         
         self.createEntities(sceneNr)
         
@@ -1528,66 +1735,74 @@ class scene:
             if touchscreen: self.UI = self.createTouchscreenButtons()
             
             self.light = pointLight([-2000, 2000, -2000], [-1/3*np.pi, -1/10*np.pi, 0], [218, 203, 125], 10000)
+            LIGHTING.write(np.ascontiguousarray([*self.light.position, 0, *self.light.color, 0, self.light.strength], 'f').data.cast('B'))
 
-            self.terrain = gltfMesh("models/terrain/terrain.gltf", [material("gfx/map8N.png").img, self.heightmap.img, material("gfx/grass.png").img])
+            self.heightmap = material("game/gfx/map8RG.png")
+            self.normmap = material("game/gfx/map8N.png")
+
+            self.terrain = gltfMesh("game/models/environment/terrain/terrain.gltf", [self.normmap.img, self.heightmap.img, material("game/gfx/grass.png").img])
             self.terrain.shaders.uniforms['ofset'][:] = np.ascontiguousarray(np.round(self.player.position[0:3:2] / 5) * 5, 'f').data.cast('B')
+
+            if shellGrass:
+                self.grass = gltfMesh("game/models/environment/shell/shell.gltf", [self.normmap.img, self.heightmap.img, material("game/gfx/hash.png").img])
+                self.grass.shaders.uniforms['ofset'][:] = np.ascontiguousarray(np.round(self.player.position[0:3:2] / 5) * 5, 'f').data.cast('B')
             
             self.entities = {
-                ENTITY_TYPE["player"]:            [self.player,                    gltfMesh("models/vedal987/vedal987.gltf",                    [material("models/vedal987/vedal987.png").img])],
-                ENTITY_TYPE["Camilla's_tent"]:    [entity([-8,663.55,40],20),      gltfMesh("models/V-nexus/Camilla's_tent/Camillas_tent.gltf", [material("models/V-nexus/Camilla's_tent/Camillas_tent.png").img,
-                                                                                                                                                 material("models/V-nexus/Camilla's_tent/Camillas_tent.png").img])],
-                ENTITY_TYPE["drone_factory"]:     [entity([43,660.35,7.775],25),   gltfMesh("models/V-nexus/drone_factory/drone_factory.gltf",  [material("models/V-nexus/drone_factory/drone_factory.png").img,
-                                                                                                                                                 material("models/V-nexus/drone_factory/drone_factory.png").img,
-                                                                                                                                                 material("models/V-nexus/drone_factory/drone_factory.png").img,
-                                                                                                                                                 material("models/V-nexus/drone_factory/drone_factory.png").img])],
-                ENTITY_TYPE["floors"]:            [entity([0,660.5,0],60),         gltfMesh("models/V-nexus/floors/floors.gltf",                [material("models/V-nexus/floors/grass_field2.png").img,
-                                                                                                                                                 material("models/V-nexus/floors/grass_field2.png").img,
-                                                                                                                                                 material("models/V-nexus/floors/grass_field2.png").img,
-                                                                                                                                                 material("models/V-nexus/floors/grass_field2.png").img,
-                                                                                                                                                 material("models/V-nexus/floors/item_factory.png").img,
-                                                                                                                                                 material("models/V-nexus/floors/upgrade_smith.png").img,
-                                                                                                                                                 material("models/V-nexus/floors/vedals_house.png").img,
-                                                                                                                                                 material("models/V-nexus/floors/water_pump.png").img,
-                                                                                                                                                 material("models/V-nexus/floors/power_generator.png").img])],
-                ENTITY_TYPE["item_factory"]:      [entity([46,664.31,-33.75],20),  gltfMesh("models/V-nexus/item_factory/item_factory.gltf",    [material("models/V-nexus/item_factory/item_factory.png").img])],
-                ENTITY_TYPE["item_shop"]:         [entity([42,658.1,46],10),       gltfMesh("models/V-nexus/item_shop/item_shop.gltf",          [material("models/V-nexus/item_shop/item_shop.png").img])],
-                ENTITY_TYPE["street"]:            [entity([6,658,0],70),           gltfMesh("models/V-nexus/street/street.gltf",                [material("models/V-nexus/street/street.png").img])],
-                ENTITY_TYPE["upygamerade_smith"]: [entity([41.9,661.2,-10.05],14), gltfMesh("models/V-nexus/upgrade_smith/upgrade_smith.gltf",  [material("models/V-nexus/upgrade_smith/upgrade_smith.png").img,
-                                                                                                                                                 material("models/V-nexus/upgrade_smith/piston.png").img,
-                                                                                                                                                 material("models/V-nexus/upgrade_smith/piston_base.png").img,
-                                                                                                                                                 material("models/V-nexus/upgrade_smith/gear.png").img,
-                                                                                                                                                 material("models/V-nexus/upgrade_smith/piston.png").img,
-                                                                                                                                                 material("models/V-nexus/upgrade_smith/piston_base.png").img,
-                                                                                                                                                 material("models/V-nexus/upgrade_smith/piston.png").img,
-                                                                                                                                                 material("models/V-nexus/upgrade_smith/piston_base.png").img,
-                                                                                                                                                 material("models/V-nexus/upgrade_smith/piston.png").img,
-                                                                                                                                                 material("models/V-nexus/upgrade_smith/piston_base.png").img,
-                                                                                                                                                 material("models/V-nexus/upgrade_smith/gear.png").img,
-                                                                                                                                                 material("models/V-nexus/upgrade_smith/gear.png").img])],
-                ENTITY_TYPE["utilities"]:         [entity([7.75,658.6,-37],20),    gltfMesh("models/V-nexus/utilities/utilities.gltf",          [material("models/V-nexus/utilities/water_pump.png").img,
-                                                                                                                                                 material("models/V-nexus/utilities/water_pump.png").img,
-                                                                                                                                                 material("models/V-nexus/utilities/water_pump.png").img,
-                                                                                                                                                 material("models/V-nexus/utilities/water_pump.png").img,
-                                                                                                                                                 material("models/V-nexus/utilities/power_generator.png").img,
-                                                                                                                                                 material("models/V-nexus/utilities/power_generator.png").img])],
-                ENTITY_TYPE["walls"]:             [entity([0,660.5,0],70),         gltfMesh("models/V-nexus/walls/walls.gltf",                  [material("models/V-nexus/walls/walls.png").img,
-                                                                                                                                                 material("models/V-nexus/walls/walls.png").img,
-                                                                                                                                                 material("models/V-nexus/walls/walls.png").img,
-                                                                                                                                                 material("models/V-nexus/walls/walls.png").img,
-                                                                                                                                                 material("models/V-nexus/walls/walls.png").img,
-                                                                                                                                                 material("models/V-nexus/walls/walls.png").img,
-                                                                                                                                                 material("models/V-nexus/walls/walls.png").img,
-                                                                                                                                                 material("models/V-nexus/walls/walls.png").img,])],
-                ENTITY_TYPE["world_center"]:      [entity([2,709.1,4],70),         gltfMesh("models/V-nexus/world_center/world_center.gltf",    [material("models/V-nexus/world_center/world_center_building.png").img,
-                                                                                                                                                 material("models/V-nexus/world_center/beacon.png").img])],
-                ENTITY_TYPE["vedal's_house"]:     [entity([-36.15,663.5,26],40),   gltfMesh("models/V-nexus/vedal's_house/vedals_house.gltf",   [material("models/V-nexus/vedal's_house/vedals_house.png").img,
-                                                                                                                                                 material("models/V-nexus/vedal's_house/vedals_house.png").img,
-                                                                                                                                                 material("models/V-nexus/vedal's_house/vedals_house.png").img,
-                                                                                                                                                 material("models/V-nexus/vedal's_house/vedals_house.png").img,
-                                                                                                                                                 material("models/V-nexus/vedal's_house/vedals_house.png").img,
-                                                                                                                                                 material("models/V-nexus/vedal's_house/vedals_house.png").img,
-                                                                                                                                                 material("models/V-nexus/vedal's_house/vedals_house.png").img,
-                                                                                                                                                 material("models/V-nexus/vedal's_house/vedals_house.png").img])],
+                ENTITY_TYPE["player"]:            [self.player,                    gltfMesh("game/models/vedal987/vedal987.gltf",                    [material("game/models/vedal987/vedal987.png").img])],
+                ENTITY_TYPE["Camilla's_tent"]:    [entity([-8,663.55,40],20),      gltfMesh("game/models/V-nexus/Camilla's_tent/Camillas_tent.gltf", [material("game/models/V-nexus/Camilla's_tent/Camillas_tent.png").img,
+                                                                                                                                                 material("game/models/V-nexus/Camilla's_tent/Camillas_tent.png").img])],
+                ENTITY_TYPE["drone_factory"]:     [entity([43,660.35,7.775],25),   gltfMesh("game/models/V-nexus/drone_factory/drone_factory.gltf",  [material("game/models/V-nexus/drone_factory/drone_factory.png").img,
+                                                                                                                                                 material("game/models/V-nexus/drone_factory/drone_factory.png").img,
+                                                                                                                                                 material("game/models/V-nexus/drone_factory/drone_factory.png").img,
+                                                                                                                                                 material("game/models/V-nexus/drone_factory/drone_factory.png").img])],
+                ENTITY_TYPE["floors"]:            [entity([0,660.5,0],60),         gltfMesh("game/models/V-nexus/floors/floors.gltf",                [material("game/models/V-nexus/floors/grass_field2.png").img,
+                                                                                                                                                 material("game/models/V-nexus/floors/grass_field2.png").img,
+                                                                                                                                                 material("game/models/V-nexus/floors/grass_field2.png").img,
+                                                                                                                                                 material("game/models/V-nexus/floors/grass_field2.png").img,
+                                                                                                                                                 material("game/models/V-nexus/floors/item_factory.png").img,
+                                                                                                                                                 material("game/models/V-nexus/floors/upgrade_smith.png").img,
+                                                                                                                                                 material("game/models/V-nexus/floors/vedals_house.png").img,
+                                                                                                                                                 material("game/models/V-nexus/floors/water_pump.png").img,
+                                                                                                                                                 material("game/models/V-nexus/floors/power_generator.png").img])],
+                ENTITY_TYPE["item_factory"]:      [entity([46,664.31,-33.75],20),  gltfMesh("game/models/V-nexus/item_factory/item_factory.gltf",    [material("game/models/V-nexus/item_factory/item_factory.png").img])],
+                ENTITY_TYPE["item_shop"]:         [entity([42,658.1,46],10),       gltfMesh("game/models/V-nexus/item_shop/item_shop.gltf",          [material("game/models/V-nexus/item_shop/item_shop.png").img])],
+                ENTITY_TYPE["street"]:            [entity([6,658,0],70),           gltfMesh("game/models/V-nexus/street/street.gltf",                [material("game/models/V-nexus/street/street.png").img])],
+                ENTITY_TYPE["upygamerade_smith"]: [entity([41.9,661.2,-10.05],14), gltfMesh("game/models/V-nexus/upgrade_smith/upgrade_smith.gltf",  [material("game/models/V-nexus/upgrade_smith/upgrade_smith.png").img,
+                                                                                                                                                 material("game/models/V-nexus/upgrade_smith/piston.png").img,
+                                                                                                                                                 material("game/models/V-nexus/upgrade_smith/piston_base.png").img,
+                                                                                                                                                 material("game/models/V-nexus/upgrade_smith/gear.png").img,
+                                                                                                                                                 material("game/models/V-nexus/upgrade_smith/piston.png").img,
+                                                                                                                                                 material("game/models/V-nexus/upgrade_smith/piston_base.png").img,
+                                                                                                                                                 material("game/models/V-nexus/upgrade_smith/piston.png").img,
+                                                                                                                                                 material("game/models/V-nexus/upgrade_smith/piston_base.png").img,
+                                                                                                                                                 material("game/models/V-nexus/upgrade_smith/piston.png").img,
+                                                                                                                                                 material("game/models/V-nexus/upgrade_smith/piston_base.png").img,
+                                                                                                                                                 material("game/models/V-nexus/upgrade_smith/gear.png").img,
+                                                                                                                                                 material("game/models/V-nexus/upgrade_smith/gear.png").img])],
+                ENTITY_TYPE["utilities"]:         [entity([7.75,658.6,-37],20),    gltfMesh("game/models/V-nexus/utilities/utilities.gltf",          [material("game/models/V-nexus/utilities/water_pump.png").img,
+                                                                                                                                                 material("game/models/V-nexus/utilities/water_pump.png").img,
+                                                                                                                                                 material("game/models/V-nexus/utilities/water_pump.png").img,
+                                                                                                                                                 material("game/models/V-nexus/utilities/water_pump.png").img,
+                                                                                                                                                 material("game/models/V-nexus/utilities/power_generator.png").img,
+                                                                                                                                                 material("game/models/V-nexus/utilities/power_generator.png").img])],
+                ENTITY_TYPE["walls"]:             [entity([0,660.5,0],70),         gltfMesh("game/models/V-nexus/walls/walls.gltf",                  [material("game/models/V-nexus/walls/walls.png").img,
+                                                                                                                                                 material("game/models/V-nexus/walls/walls.png").img,
+                                                                                                                                                 material("game/models/V-nexus/walls/walls.png").img,
+                                                                                                                                                 material("game/models/V-nexus/walls/walls.png").img,
+                                                                                                                                                 material("game/models/V-nexus/walls/walls.png").img,
+                                                                                                                                                 material("game/models/V-nexus/walls/walls.png").img,
+                                                                                                                                                 material("game/models/V-nexus/walls/walls.png").img,
+                                                                                                                                                 material("game/models/V-nexus/walls/walls.png").img,])],
+                ENTITY_TYPE["world_center"]:      [entity([2,709.1,4],70),         gltfMesh("game/models/V-nexus/world_center/world_center.gltf",    [material("game/models/V-nexus/world_center/world_center_building.png").img,
+                                                                                                                                                 material("game/models/V-nexus/world_center/beacon.png").img])],
+                ENTITY_TYPE["vedal's_house"]:     [entity([-36.15,663.5,26],40),   gltfMesh("game/models/V-nexus/vedal's_house/vedals_house.gltf",   [material("game/models/V-nexus/vedal's_house/vedals_house.png").img,
+                                                                                                                                                 material("game/models/V-nexus/vedal's_house/vedals_house.png").img,
+                                                                                                                                                 material("game/models/V-nexus/vedal's_house/vedals_house.png").img,
+                                                                                                                                                 material("game/models/V-nexus/vedal's_house/vedals_house.png").img,
+                                                                                                                                                 material("game/models/V-nexus/vedal's_house/vedals_house.png").img,
+                                                                                                                                                 material("game/models/V-nexus/vedal's_house/vedals_house.png").img,
+                                                                                                                                                 material("game/models/V-nexus/vedal's_house/vedals_house.png").img,
+                                                                                                                                                 material("game/models/V-nexus/vedal's_house/vedals_house.png").img])],
                 }
     
     def createTouchscreenButtons(self):
@@ -1596,7 +1811,7 @@ class scene:
         vertexBuffer = np.array([touchscreenvertices[0], touchscreenvertices[2], touchscreenvertices[1], touchscreenvertices[3], touchscreenvertices[1], touchscreenvertices[2]], dtype=np.float32)
         texBuffer = np.array([texcoords[0], texcoords[2], texcoords[1], texcoords[3], texcoords[1], texcoords[2]], dtype=np.float32)
 
-        return shader2D(vertexBuffer, texBuffer, material("gfx/floor.png").img)
+        return shader2D(vertexBuffer, texBuffer, material("game/gfx/floor.png").img)
 
     def setDrawFunc(self):
 
@@ -1617,7 +1832,10 @@ class scene:
         else:
 
             self.drawFunc = self.drawColor
-            self.moveTerrainUniforms = [self.terrain.shaders.uniforms['ofset'][:]]
+            self.moveTerrainUniforms = [self.terrain.shaders.uniforms['ofset']]
+        
+        if shellGrass:
+            self.moveTerrainUniforms.append(self.grass.shaders.uniforms['ofset'])
 
     def createEntityGrid(self):
 
@@ -1640,7 +1858,6 @@ class scene:
             self.jumpStartHeight = self.height
         
         t = (jump - self.jumpTime)
-        #jumpheight = 0.005*t - 0.0000049 * (t**2)
         jumpheight = 0.00767*t - 0.0000049 * (t**2)
         
         if jumpheight < (self.height - self.jumpStartHeight):
@@ -1659,12 +1876,7 @@ class scene:
         self.player.angle(frametime, dPos)
         self.player.move(movement * 0.01 * frametime)
         
-
         pos = self.player.position[0:3:2]
-
-        for uniform in self.moveTerrainUniforms:
-            uniform[:] = np.ascontiguousarray([np.round(pos / 5) * 5], 'f').data.cast('B')
-        
         pos = [int(i * 4096/2000 + 2048) for i in pos]
 
         mapHeight = [self.heightmap.pixels.getpixel([pos[0] + x, pos[1] + y]) for x, y in [(0, -1), (-1, 0), (0, 0), (1, 0), (0, 1)]]
@@ -1677,7 +1889,7 @@ class scene:
 
         self.player.eulers[0] = pitch
         self.player.eulers[1] = roll
-        self.height = max(mapHeight[2]  * 977.5/(255*8), collisionHeight - 0.1)
+        self.height = max(mapHeight[2] * 977.5/(255*8), collisionHeight - 0.1)
         
         if not self.jumpTime:
             self.player.position[1] = self.height
@@ -1768,20 +1980,20 @@ class scene:
         if touchscreen: self.UI.render()
         
         cam = self.player.camera
-        view = cam.getViewTransform()
+        view = cam.view
         frustum = cam.frustum
 
-        VIEW.write(view)
-        LIGHTING.write(np.ascontiguousarray([*cam.position, 0,
-                                             *self.light.position, 0,
-                                             *self.light.color, 0,
-                                             self.light.strength], 'f').data.cast('B'))
-        
-        terrain = self.terrain
+        pos = cam.position[0:3:2]
 
+        for uniform in self.moveTerrainUniforms:
+            uniform[:] = np.ascontiguousarray([np.round(pos / 5) * 5], 'f').data.cast('B')
+        
         self.drawFunc(frustum, view)
         
-        terrain.shaders.render()
+        self.terrain.shaders.render()
+
+        if shellGrass: self.grass.shaders.render()
+
         self.boundingbox.draw()
         
         image.blit(output)
@@ -1871,7 +2083,7 @@ class game:
         pygame.event.set_grab(True)
         
         self.jump = 0
-        saveName = "savefile.txt"
+        saveName = "game/savefile.txt"
         try:
             data = np.loadtxt(saveName, converters=float, dtype=np.float32)
             self.sceneNr = data[0]
@@ -1894,6 +2106,7 @@ class game:
     def gameLoop(self):
         
         result = CONTINUE
+        update = False
 
         for event in pygame.event.get():
 
@@ -1905,22 +2118,20 @@ class game:
             
             elif event.type == pygame.MOUSEWHEEL:
                 self.scene.player.camera.zoom -= event.y
+                update = True
             
             elif event.type == pygame.FINGERDOWN:
                 if joystickCorners[0,0] < event.x < joystickCorners[3,0] and joystickCorners[0,1] < event.y < joystickCorners[3,1] and len(fingers) == 0:
                     fingers[event.finger_id] = [event.x, event.y]
-            
             elif event.type == pygame.FINGERMOTION and event.finger_id in fingers:
                 fingers[event.finger_id] = [event.x, event.y]
-            
             elif event.type == pygame.FINGERUP and event.finger_id in fingers:
                 fingers.pop(event.finger_id)
         
         self.calculate_framerate()
-        self.handle_keys()
-        self.handle_mouse()
+        update = update or self.handle_keys()
+        self.handle_mouse(update)
         
-        self.scene.player.update()
         self.scene.render()
         
         return result
@@ -1930,12 +2141,13 @@ class game:
         if len(fingers):
             pos = next(iter(fingers.values()))
             dPos = np.array(pos, dtype= np.float32) - joystickCenter
-            dPos /= 0.35/2
+            dPos /= 0.175
             dPos = -dPos.clip(-1, 1)
         else:
             dPos = np.array([0, 0], dtype= np.float32)
         
         keys = pygame.key.get_pressed()
+        update = False
 
         #this method makes it so holding multible keys doesnt prioritize the first one in the row
         if keys[input_map["forwards"]]:  dPos[1] += 1
@@ -1950,17 +2162,29 @@ class game:
         if veclen > 1:
             dPos /= veclen
         
-        #the jump code is an ungodly mess, dont touch it if not needed
-        if self.jump: self.jump = self.scene.jump(self.time)
+        #this code is an ungodly mess, dont touch it if not needed
+        if self.jump:
+            self.jump = self.scene.jump(self.time)
+            update = True
         
-        if dPos[0] or dPos[1]: self.scene.movePlayer(dPos, sprint, self.frametime)
+        if dPos[0] or dPos[1]:
+            self.scene.movePlayer(dPos, sprint, self.frametime)
+            update = True
+        
+        return update
 
-    def handle_mouse(self):
+    def handle_mouse(self, update):
         
-        (x,y) = pygame.mouse.get_rel()
-        dEulers = 0.001 * -x * np.array([1,0,0])
-        dEulers -= 0.001 * y * np.array([0,1,0])
-        self.scene.player.camera.spin(dEulers)
+        x, y = pygame.mouse.get_rel()
+        dEulers = [0,0,0]
+
+        if x or y:
+            dEulers += 0.001 * -x * np.array([1,0,0])
+            dEulers -= 0.001 * y * np.array([0,1,0])
+            update = True
+            
+        if update:
+            self.scene.player.update(dEulers)
     
     def set_up_timer(self):
 
@@ -1990,7 +2214,7 @@ class game:
     
     def quit(self):
         
-        saveName = "savefile.txt"
+        saveName = "game/savefile.txt"
         np.savetxt(saveName, [self.sceneNr, *self.scene.player.position, *self.scene.player.eulers, *self.scene.player.camera.eulers, self.scene.player.camera.zoom], fmt='%f')
 
 class menu:
@@ -2006,7 +2230,7 @@ class menu:
     
     def createObjects(self):
         
-        texture = material("gfx/button.png")
+        texture = material("game/gfx/button.png")
         
         self.buttons = []
         
@@ -2154,7 +2378,7 @@ class gltfMesh:
         #create the np files with this
         #import precomputeGLTF
         #precomputeGLTF.loadGLTF(filename)
-        
+
         hasNormals, hasTextures, self.hasJoints, listLenght = np.loadtxt(f"{filename}.Data").astype(np.int32)
         self.boundingBox = np.loadtxt(f"{filename}.BoundingBox").astype(np.float32)
         self.boundingBox = [[self.boundingBox[2*i], self.boundingBox[2*i + 1]] for i in range(listLenght)]
@@ -2186,9 +2410,10 @@ class gltfMesh:
             
         #shaders
 
-        if filename == "models/terrain/terrain.gltf": self.shaders = shaderTerrain(self.vertexDataList[0], textures[0], textures[1], textures[2])
-        elif self.hasJoints:                          self.shaders = [shader3Danimated(self.vertexDataList[i], normalDataList[i], texCoordDataList[i], jointDataList[i], weightDataList[i], self.nrJoints, textures[i]) for i in range(listLenght)]
-        else:                                         self.shaders = [shader3D(self.vertexDataList[i], normalDataList[i], texCoordDataList[i], textures[i]) for i in range(listLenght)]
+        if filename == "game/models/environment/terrain/terrain.gltf": self.shaders = shaderTerrain(self.vertexDataList[0], *textures)
+        elif filename == "game/models/environment/shell/shell.gltf":   self.shaders = shaderShellGrass(self.vertexDataList[0], *textures)
+        elif self.hasJoints:                                           self.shaders = [shader3Danimated(self.vertexDataList[i], normalDataList[i], texCoordDataList[i], jointDataList[i], weightDataList[i], self.nrJoints, textures[i]) for i in range(listLenght)]
+        else:                                                          self.shaders = [shader3D(self.vertexDataList[i], normalDataList[i], texCoordDataList[i], textures[i]) for i in range(listLenght)]
     
     def setUniform(self):
         
@@ -2219,6 +2444,14 @@ class boundingBoxMesh:
 
 #####################################################################################
 
+#convert 16 bit 1 channel to 8 bit 2 channel
+#import cv2
+#img = cv2.imread("game/gfx/map8.png", cv2.IMREAD_UNCHANGED)
+#pixels = cv2.cvtColor(img, cv2.COLOR_BGRA2RGBA)
+#*size, channels = pixels.shape
+#newpixels = np.array([[[r//256, r%256, 0, 255] for r, g, b, a in row] for row in pixels])
+#cv2.imwrite("game/gfx/map8RG.png", newpixels)
+
 async def main():
     myApp = game()
     result = CONTINUE
@@ -2234,13 +2467,5 @@ async def main():
             result = CONTINUE
         await asyncio.sleep(0)
     myApp.quit()
-
-#convert 16 bit 1 channel to 8 bit 2 channel
-#import cv2
-#img = cv2.imread("gfx/map8.png", cv2.IMREAD_UNCHANGED)
-#pixels = cv2.cvtColor(img, cv2.COLOR_BGRA2RGBA)
-#*size, channels = pixels.shape
-#newpixels = np.array([[[r//256, r%256, 0, 255] for r, g, b, a in row] for row in pixels])
-#cv2.imwrite("gfx/map8RG.png", newpixels)
 
 asyncio.run(main())
