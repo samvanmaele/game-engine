@@ -1,1 +1,1 @@
-https://samvanmaele.github.io/game-engine/
+https://samvanmaele.github.io/game-engine-python/
